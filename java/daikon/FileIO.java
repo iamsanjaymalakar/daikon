@@ -3103,7 +3103,8 @@ public final class FileIO {
       E @NonNull [] all = enum_class.getEnumConstants();
       StringJoiner msg = new StringJoiner(", ");
       for (E e : all) {
-        msg.add(String.format("'%s'", e.name().toLowerCase(Locale.ENGLISH)));
+        Enum<?> enumConstant = (Enum<?>) e;
+        msg.add(String.format("'%s'", enumConstant.name().toLowerCase(Locale.ENGLISH)));
       }
       decl_error(state, "'%s' found where %s expected", str, msg);
       throw new Error("execution cannot get to here, previous line threw an error");

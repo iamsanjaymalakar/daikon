@@ -3,6 +3,7 @@ package daikon.chicory;
 import java.util.AbstractList;
 import java.util.List;
 import org.checkerframework.checker.lock.qual.GuardSatisfied;
+import org.checkerframework.checker.mustcall.qual.NotOwning;
 import org.checkerframework.dataflow.qual.Pure;
 import org.checkerframework.dataflow.qual.SideEffectFree;
 
@@ -24,7 +25,7 @@ public final class NonsensicalList extends AbstractList<Object> implements List<
 
   @Pure
   @Override
-  public Object get(@GuardSatisfied NonsensicalList this, int index) {
+  public @NotOwning Object get(@GuardSatisfied NonsensicalList this, int index) {
     return NonsensicalObject.getInstance();
   }
 
