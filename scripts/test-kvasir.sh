@@ -28,7 +28,7 @@ make showvars compile daikon.jar
 
 echo "test-kvasir.sh is running kvasir and DynComp tests"
 
-# Running Kvasir tests here may seem redundant with the fjalar project's Travis
+# Running Kvasir tests here may seem redundant with the fjalar project's CI
 # build; however, it means that they are run on each branch and pull request.
 
 # Get correct version of Kvasir/fjalar
@@ -49,6 +49,10 @@ make -f tests/kvasir-tests/Makefile.common show-os
 
 make kvasir
 
-make -C tests/dyncomp-tests regression-tests
-#make -C tests/kvasir-tests regression-tests
-make MPARG=-j1 -C tests/kvasir-tests regression-tests
+# Run the Kvasir tests even if a DynComp test fails.
+status=0
+make -C tests/dyncomp-tests regression-tests || status=$?
+# Run the Kvasir tests one at a time, so that several builds can run
+# simultaneously on one machine (see pull request #374).
+make DAIKON_TEST_JOBS=1 -C tests/kvasir-tests regression-tests || status=$?
+exit $status

@@ -38,10 +38,10 @@ import org.junit.Test;
 import typequals.prototype.qual.Prototype;
 
 /**
- * This is a tester for the results of adding or checking an sample to an invariant. It can test
- * practically any invariant in the Daikon system given the appropriate commands. The test are
+ * This is a tester for the results of adding or checking a sample to an invariant. It can test
+ * practically any invariant in the Daikon system given the appropriate commands. The tests are
  * configured from the {@code InvariantTest.commands} file and errors that occur are written to the
- * InvariantTest.diffs file. For conveince a partcailly complete file InvariantTest.input can be
+ * InvariantTest.diffs file. For convenience a partially complete file InvariantTest.input can be
  * used to generate a complete commands file. To generate InvariantTest.commands from
  * InvariantTest.input run this class's main method with option "--generate_goals".
  *
@@ -105,7 +105,7 @@ public class InvariantAddAndCheckTester {
   private static final String lineSep = Global.lineSep;
 
   /**
-   * This function produces the format list for intialization of the static format list variable.
+   * This function produces the format list for initialization of the static format list variable.
    */
   static List<String> getTestFormatList() {
     List<String> result = new ArrayList<>();
@@ -128,14 +128,25 @@ public class InvariantAddAndCheckTester {
     // Don't care about comparability info because we are only
     // creating variables for the purpose of being compared (thus they
     // should all be comparable)
+    boolean oldIgnoreComparability = Daikon.ignore_comparability;
     Daikon.ignore_comparability = true;
 
-    // run the actual test
+    // This test creates variables in the old decl format.
+    Boolean oldNewDeclFormat = FileIO.new_decl_format;
+    FileIO.new_decl_format = false;
 
-    if (!execute()) {
-      fail(
-          "At least one test failed."
-              + " Inspect java/daikon/test/InvariantAddAndCheckTest.diffs for error report.");
+    try {
+      // run the actual test
+      if (!execute()) {
+        fail("At least one test failed. Inspect " + diffFileName + " for error report.");
+      }
+    } finally {
+      Daikon.ignore_comparability = oldIgnoreComparability;
+      if (oldNewDeclFormat == null) {
+        FileIO.resetNewDeclFormat();
+      } else {
+        FileIO.new_decl_format = oldNewDeclFormat;
+      }
     }
   }
 
@@ -272,7 +283,7 @@ public class InvariantAddAndCheckTester {
    * Determines whether a line is a comment or not.
    *
    * @param line the line in question
-   * @return true if the line is a comment (that is, not to be interpretted as a command); false
+   * @return true if the line is a comment (that is, not to be interpreted as a command); false
    *     otherwise
    */
   @Pure
@@ -281,7 +292,7 @@ public class InvariantAddAndCheckTester {
   }
 
   /**
-   * Determines whether a given line is made only of whitespcae.
+   * Determines whether a given line is made only of whitespace.
    *
    * @param line the line in question
    * @return true if the line is made up only of whitespace, false otherwise

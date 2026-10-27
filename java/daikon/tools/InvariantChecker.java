@@ -4,6 +4,7 @@ import static java.util.logging.Level.FINE;
 import static java.util.logging.Level.INFO;
 
 import daikon.Daikon;
+import daikon.DaikonGetopt;
 import daikon.Debug;
 import daikon.FileIO;
 import daikon.Global;
@@ -31,6 +32,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.StringJoiner;
 import java.util.logging.Logger;
 import org.checkerframework.checker.mustcall.qual.Owning;
 import org.checkerframework.checker.nullness.qual.Nullable;
@@ -43,7 +45,7 @@ import org.plumelib.util.StringsPlume;
  */
 public class InvariantChecker {
   private InvariantChecker() {
-    throw new Error("do not instantiate");
+    throw new UnsupportedOperationException("do not instantiate");
   }
 
   public static final Logger debug = Logger.getLogger("daikon.tools.InvariantChecker");
@@ -112,7 +114,7 @@ public class InvariantChecker {
 
   /**
    * This does the work of {@link #main(String[])}, but it never calls System.exit, so it is
-   * appropriate to be called progrmmatically.
+   * appropriate to be called programmatically.
    *
    * @param args command-line arguments, like those of {@link #main}
    */
@@ -134,20 +136,16 @@ public class InvariantChecker {
           new LongOpt(verbose_SWITCH, LongOpt.NO_ARGUMENT, null, 0),
           new LongOpt(Daikon.debugAll_SWITCH, LongOpt.NO_ARGUMENT, null, 0),
           new LongOpt(Daikon.debug_SWITCH, LongOpt.REQUIRED_ARGUMENT, null, 0),
-          new LongOpt(Daikon.ppt_regexp_SWITCH, LongOpt.REQUIRED_ARGUMENT, null, 0),
           new LongOpt(Daikon.track_SWITCH, LongOpt.REQUIRED_ARGUMENT, null, 0),
         };
-    Getopt g = new Getopt("daikon.tools.InvariantChecker", args, "h", longopts);
+    DaikonGetopt g = new DaikonGetopt(args, "", longopts, usage);
     int c;
     while ((c = g.getopt()) != -1) {
       switch (c) {
         case 0:
           // got a long option
           String option_name = longopts[g.getLongind()].getName();
-          if (Daikon.help_SWITCH.equals(option_name)) {
-            System.out.println(usage);
-            throw new Daikon.NormalTermination();
-          } else if (conf_SWITCH.equals(option_name)) {
+          if (conf_SWITCH.equals(option_name)) {
             doConf = true;
           } else if (filter_SWITCH.equals(option_name)) {
             doFilter = true;
@@ -178,17 +176,11 @@ public class InvariantChecker {
                   "Error parsing track argument '" + Daikon.getOptarg(g) + "' - " + error);
             }
           } else {
-            throw new RuntimeException("Unknown long option received: " + option_name);
+            throw new Daikon.BugInDaikon("Unhandled long option " + option_name);
           }
           break;
-        case 'h':
-          System.out.println(usage);
-          throw new Daikon.NormalTermination();
-        case '?':
-          break; // getopt() already printed an error
         default:
-          System.out.println("getopt() returned " + c);
-          break;
+          throw new Daikon.BugInDaikon("getopt() returned " + c);
       }
     }
 
@@ -262,14 +254,13 @@ public class InvariantChecker {
       dtrace_files.add(dtrace.toString());
     }
 
-    String commaLine = "";
+    StringJoiner commaLine = new StringJoiner(",");
     for (File inFile : invariants) {
-      String name = inFile.getName().replace(".inv", "").replace(".gz", "");
-      commaLine += "," + name;
+      commaLine.add(inFile.getName().replace(".inv", "").replace(".gz", ""));
     }
-    outputComma.add(commaLine);
+    outputComma.add(commaLine.toString());
 
-    commaLine = "";
+    commaLine = new StringJoiner(",");
     for (File inFile : invariants) {
       File inv_file = inFile;
       failedInvariants.clear();
@@ -287,9 +278,9 @@ public class InvariantChecker {
       int failedCount = failedInvariants.size();
       int testedCount = testedInvariants.size();
       String percent = toPercentage(failedCount, testedCount);
-      commaLine += "," + percent;
+      commaLine.add(percent);
     }
-    outputComma.add(commaLine);
+    outputComma.add(commaLine.toString());
 
     System.out.println();
     for (String output : outputComma) {

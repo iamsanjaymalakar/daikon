@@ -558,8 +558,8 @@ public class DeclWriter extends DaikonWriter implements ComparabilityProvider {
     }
 
     // Write out the declared and representation types
-    outFile.println("  dec-type " + escape(var.getTypeNameOnly()));
-    outFile.println("  rep-type " + escape(var.getRepTypeNameOnly()));
+    outFile.println("  dec-type " + escape(var.getTypeName()));
+    outFile.println("  rep-type " + escape(var.getRepTypeName()));
 
     // Write out the constant value (if present)
     String const_val = var.get_const_val();
@@ -589,7 +589,7 @@ public class DeclWriter extends DaikonWriter implements ComparabilityProvider {
   }
 
   /**
-   * Returns the caparability value for a varaible.
+   * Returns the comparability value for a variable.
    *
    * @param var variable whose value is desired
    * @param compare_ppt ppt with compare value if comparability-file present, null otherwise
@@ -603,7 +603,10 @@ public class DeclWriter extends DaikonWriter implements ComparabilityProvider {
       comp_str = "-1";
       DeclReader.DeclVarInfo varinfo = compare_ppt.find_var(var.getName());
       if (varinfo != null) {
-        comp_str = varinfo.get_comparability();
+        String comparability = varinfo.get_comparability();
+        if (comparability != null) {
+          comp_str = comparability;
+        }
       }
     } else {
       // Check to see if DynComp data is present.
@@ -650,12 +653,12 @@ public class DeclWriter extends DaikonWriter implements ComparabilityProvider {
     }
 
     // Only hashcodes have object ppts
-    if (!var.getRepTypeNameOnly().equals("hashcode")) {
+    if (!var.getRepTypeName().equals("hashcode")) {
       return null;
     }
 
     // Get the type (class) of this variable
-    String decl_type = var.getTypeNameOnly();
+    String decl_type = var.getTypeName();
     // System.out.printf("Looking for hierarchy type %s%n", decl_type);
 
     // If this ppt is the object ppt for this type, don't create a relation
@@ -693,7 +696,7 @@ public class DeclWriter extends DaikonWriter implements ComparabilityProvider {
   }
 
   /**
-   * Looks for all of the object-user ppt/variable hiearchy relations beginning at var. Once a
+   * Looks for all of the object-user ppt/variable hierarchy relations beginning at var. Once a
    * relation is found, no more relations are looked for under that variable. In most cases, it
    * would be expected that only one relation will be found (either var is a class with a
    * corresponding object ppt or it is not). However, depending on what classes are being

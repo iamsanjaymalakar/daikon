@@ -46,6 +46,12 @@ public class MultiDiffVisitor extends PrintNullDiffVisitor {
     spinfoMode = true;
   }
 
+  /** Undoes {@link #setForSpinfoOut}: subsequent output goes to System.out, not in spinfo mode. */
+  public static void resetSpinfoOut() {
+    MultiDiffVisitor.out = System.out;
+    spinfoMode = false;
+  }
+
   @Override
   public void visit(RootNode node) {
 
@@ -97,7 +103,7 @@ public class MultiDiffVisitor extends PrintNullDiffVisitor {
     int unjustifiedKill = 0;
     ArrayList<String> bigList = new ArrayList<>();
 
-    // New historgram stuff
+    // New histogram stuff
     System.out.println("Histogram**************");
 
     // This gets all of the output in the format:

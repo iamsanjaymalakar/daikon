@@ -213,7 +213,7 @@ import typequals.prototype.qual.Prototype;
 public final class Daikon {
 
   private Daikon() {
-    throw new Error("do not instantiate");
+    throw new UnsupportedOperationException("do not instantiate");
   }
 
   /**
@@ -223,10 +223,10 @@ public final class Daikon {
   public static int dkconfig_progress_delay = 1000;
 
   /** The current version of Daikon. */
-  public static final String release_version = "5.8.23";
+  public static final String release_version = "5.9.1";
 
   /** The date for the current version of Daikon. */
-  public static final String release_date = "June 4, 2025";
+  public static final String release_date = "September 1, 2026";
 
   /** A description of the Daikon release (version number, date, and URL). */
   public static final String release_string =
@@ -518,7 +518,7 @@ public final class Daikon {
   public static final Logger debugStats = Logger.getLogger("daikon.stats");
 
   /** The usage message for this program. */
-  static String usage =
+  public static final String usage =
       StringsPlume.joinLines(
           release_string,
           // "Uses the Java port of GNU getopt, copyright (c) 1998 Aaron M. Renn",
@@ -719,7 +719,7 @@ public final class Daikon {
 
   /**
    * This does the work of {@link #main}, but it never calls System.exit, so it is appropriate to be
-   * called progrmmatically.
+   * called programmatically.
    *
    * @param args the command-line arguments
    */
@@ -979,8 +979,11 @@ public final class Daikon {
     ppt_omit_regexp = null;
     var_regexp = null;
     var_omit_regexp = null;
+    ppt_max_name = null;
     server_dir = null;
     use_mem_monitor = false;
+    userDefinedInvariants.clear();
+    spinfoFiles.clear();
 
     proto_invs.clear();
   }
@@ -1003,8 +1006,18 @@ public final class Daikon {
 
   // ///////////////////////////////////////////////////////////////////////////
   // Read in the command line options
-  // Return {decls, dtrace, spinfo, map} files.
-  static FileOptions read_options(String[] args, String usage) {
+
+  /**
+   * Reads the command-line options, setting the corresponding static fields of Daikon and other
+   * classes.
+   *
+   * @param args the command-line arguments
+   * @param usage the usage message to print for {@code -h} and {@code --help}
+   * @return the {decls, dtrace, spinfo, map} files
+   * @throws Daikon.NormalTermination after printing the usage message, if an argument requests it
+   * @throws Daikon.UserError if an argument is malformed or names a nonexistent file
+   */
+  public static FileOptions read_options(String[] args, String usage) {
     if (args.length == 0) {
       System.out.println("Error: no files supplied on command line.");
       System.out.println(usage);
@@ -1022,7 +1035,6 @@ public final class Daikon {
     LongOpt[] longopts =
         new LongOpt[] {
           // Control output
-          new LongOpt(help_SWITCH, LongOpt.NO_ARGUMENT, null, 0),
           new LongOpt(no_text_output_SWITCH, LongOpt.NO_ARGUMENT, null, 0),
           new LongOpt(format_SWITCH, LongOpt.REQUIRED_ARGUMENT, null, 0),
           new LongOpt(show_progress_SWITCH, LongOpt.NO_ARGUMENT, null, 0),
@@ -1055,7 +1067,7 @@ public final class Daikon {
           new LongOpt(disc_reason_SWITCH, LongOpt.REQUIRED_ARGUMENT, null, 0),
           new LongOpt(mem_stat_SWITCH, LongOpt.NO_ARGUMENT, null, 0),
         };
-    Getopt g = new Getopt("daikon.Daikon", args, "ho:", longopts);
+    DaikonGetopt g = new DaikonGetopt(args, "o:", longopts, usage);
     int c;
 
     while ((c = g.getopt()) != -1) {
@@ -1065,10 +1077,7 @@ public final class Daikon {
           String option_name = longopts[g.getLongind()].getName();
 
           // Control output
-          if (help_SWITCH.equals(option_name)) {
-            System.out.println(usage);
-            throw new Daikon.NormalTermination();
-          } else if (no_text_output_SWITCH.equals(option_name)) {
+          if (no_text_output_SWITCH.equals(option_name)) {
             no_text_output = true;
           } else if (format_SWITCH.equals(option_name)) {
             String format_name = getOptarg(g);
@@ -1367,12 +1376,9 @@ public final class Daikon {
           } else if (mem_stat_SWITCH.equals(option_name)) {
             use_mem_monitor = true;
           } else {
-            throw new Daikon.UserError("Unknown option " + option_name + " on command line");
+            throw new Daikon.BugInDaikon("Unhandled long option " + option_name);
           }
           break;
-        case 'h':
-          System.out.println(usage);
-          throw new Daikon.NormalTermination();
         case 'o':
           String inv_filename = getOptarg(g);
 
@@ -1390,11 +1396,6 @@ public final class Daikon {
             throw new Daikon.UserError("Cannot write to serialization output file " + inv_file);
           }
           break;
-        //
-        case '?':
-          // break; // getopt() already printed an error
-          System.out.println(usage);
-          throw new Daikon.NormalTermination();
         //
         default:
           throw new Daikon.BugInDaikon("getopt() returned " + c);
@@ -1498,7 +1499,7 @@ public final class Daikon {
   }
 
   /**
-   * Invariants passed on the command line with the {@code --user_defined_invariant} option. A list
+   * Invariants passed on the command line with the {@code --user-defined-invariant} option. A list
    * of class names in the format required by {@link Class#forName(String)}.
    */
   private static List<@ClassGetName String> userDefinedInvariants =
@@ -1544,9 +1545,9 @@ public final class Daikon {
       proto_invs.add(CompleteOneOfString.get_proto());
       proto_invs.add(CompleteOneOfScalar.get_proto());
 
-      // Positive (x > 0) (Postive.java).  Positive is a sample invariant
+      // Positive (x > 0) (Positive.java).  Positive is a sample invariant
       // that is only included as an example.
-      // proto_invs.add (Postive.get_proto());
+      // proto_invs.add (Positive.get_proto());
     }
 
     // Unary sequence invariants
@@ -2161,6 +2162,8 @@ public final class Daikon {
 
     SplitterFactory.load_splitters(ppt, spinfoFiles);
 
+    // pconds may contain several splitters with the same condition text, from different PPT_NAME
+    // lines or .spinfo files; addConditions uses only one of them.
     Splitter[] pconds;
     if (SplitterList.dkconfig_all_splitters) {
       pconds = SplitterList.get_all();
@@ -2233,7 +2236,7 @@ public final class Daikon {
       if (dkconfig_progress_delay == -1) {
         return;
       }
-      // "display("");" is wrong becuase it leaves the timestamp and writes
+      // "display("");" is wrong because it leaves the timestamp and writes
       // spaces across the screen.
       String status = StringsPlume.rpad("", dkconfig_progress_display_width - 1);
       System.out.print("\r" + status);
@@ -2589,7 +2592,7 @@ public final class Daikon {
       // Rather than defining leaves as :::GLOBAL or :::EXIT54 (numbered
       // exit), we define them as everything except
       // ::EXIT (combined), :::ENTER, :::THROWS, :::OBJECT
-      //  and :::CLASS program points.  This scheme ensures that arbitrarly
+      //  and :::CLASS program points.  This scheme ensures that arbitrarily
       //  named program points such as :::POINT (used by convertcsv.pl)
       //  will be treated as leaves.
       if (p.ppt_name.isCombinedExitPoint()

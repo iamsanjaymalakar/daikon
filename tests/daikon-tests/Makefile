@@ -2,7 +2,10 @@
 # Read Makefile in parent directory to see what this all means
 
 # DAIKONDIR is the clone of the 'daikon' project.
-DAIKONDIR ?= $(realpath $(dir $(lastword ${MAKEFILE_LIST}))..)
+# See tests/Makefile.common for why this does not use '?='.
+ifeq ($(origin DAIKONDIR), undefined)
+  DAIKONDIR := $(realpath $(dir $(lastword ${MAKEFILE_LIST}))../..)
+endif
 SCRIPTS=${DAIKONDIR}/scripts
 
 # Help system
@@ -55,7 +58,7 @@ SQD-%: do-StackAr-% do-QueueAr-% do-DisjSets-%
 	@echo ${HR}
 polycalc-%: do-RatNum-% do-RatPoly-% do-RatPolyStack-% do-RatTermVec-%
 	@echo ${HR}
-special-cases-%: do-encapsulate_downcast-% do-compar-% do-precedence-% do-fib-% do-hanoi-% do-param-% do-suppress01-% do-suppress02-% do-StaticInteresting-% do-pine_mdiep-% do-purity-% do-Smithnosky-%
+special-cases-%: do-encapsulate_downcast-% do-compar-% do-precedence-% do-fib-% do-hanoi-% do-param-% do-suppress01-% do-suppress02-% do-StaticInteresting-% do-pine_mdiep-% do-purity-% do-Smithnosky-% do-Issue554-%
 	@echo ${HR}
 siemens-%: do-print_tokens-% do-print_tokens2-% do-replace-% do-schedule-% do-schedule2-% do-tcas-% do-tot_info-% do-space-%
 	@echo ${HR}
@@ -69,7 +72,7 @@ javautil-%: do-Vector-% do-ArrayList13-% do-ArrayList17-%
 	@echo ${HR}
 large-%: # do-Flex-% do-JML-%
 	@echo ${HR}
-new-%: do-KnownValues-% do-KnownValuesNewDecls-% do-baseline-% do-junit-% do-junit5-% do-ncalc-%
+new-%: do-KnownValues-% do-KnownValuesLong-% do-KnownValuesNewDecls-% do-NonZeroLargeRange-% do-NotOrdered-% do-baseline-% do-junit-% do-junit5-% do-ncalc-%
 	@echo ${HR}
 
 # Extra groupings

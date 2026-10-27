@@ -496,9 +496,11 @@ File format
   are:
 
     - Input language record.  Specifies the language of the target
-      program.
+      program.  The language is an arbitrary single token that contains
+      no whitespace (for example, C, C++, C#, or Java) and is not used
+      by Daikon.
 
-        input-language |C|C++|Perl|Java
+        input-language <language>
 
     - The type of comparability used in the file
 
@@ -879,10 +881,9 @@ Resolved Issues:
       other languages. For instance, as mentioned above it would be
       nice to use "*" for dereferences in C (though we don't at the
       moment). In Perl, there's a class of variables whose names start
-      with "*" (though dfepl doesn't support them at the moment) and
-      there's also a global variable for just about every punctuation
-      character, including $*. Perhaps a multi-character marker would
-      be more robust?  (smcc)
+      with "*" and there's also a global variable for just about every
+      punctuation character, including $*. Perhaps a multi-character
+      marker would be more robust?  (smcc)
 
       I'd forgotten about '*' in C.  I've changed the proposal to use
       '..' instead.  We could also use '...', or the somewhat less
@@ -946,7 +947,7 @@ Resolved Issues:
       A file doesn't provide a variable hierarchy since methods from the
       same file don't necessarily share any variables in common (except
       for file statics).  Methods that are passed a structure could have
-      a object-user relation.  I think this is closes to the object-method
+      an object-user relation.  I think this is closest to the object-method
       relation from an object oriented language.  If we think that file
       statics are interesting, then they could be included as well.  The
       front end can define the hierarchy that make sense to it.
@@ -977,7 +978,7 @@ Appendix A -- Alternative Object-User hierarchy relation solutions
   A::this.b.f2 via the A.b::Object program point (which doesn't contain
   f1).
 
-  A third approach would be to to not create relations between objects,
+  A third approach would be to not create relations between objects,
   but to instead, create direct ties from the leaves to multiple object
   points.  For example, consider a ppt 'foo()' that is passed a parameter
   of type A.  We would create two object user relations:
@@ -1628,7 +1629,7 @@ Object-User Hierarchy relationships
   A::this.b.f2 via the A.b::Object program point (which doesn't contain
   f1).
 
-  A third approach would be to to not create relations between objects,
+  A third approach would be to not create relations between objects,
   but to instead, create direct ties from the leaves to multiple object
   points.  For example, consider a ppt 'foo()' that is passed a parameter
   of type A.  We would create two object user relations:

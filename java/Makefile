@@ -1,62 +1,54 @@
 ### User customizations
 
+default: daikon
+
+# The directory containing this file.  It is computed before any other file is
+# included, because MAKEFILE_LIST ends with the most recently read makefile.
+JAVA_MAKEFILE_DIR := $(dir $(lastword ${MAKEFILE_LIST}))
+
 # Put user-specific changes in your own Makefile.user file in this directory.
 # Make will silently continue if Makefile.user does not exist.
 -include Makefile.user
 
 # Don't let the user override this; it should refer to the current directory.
-DAIKONDIR := $(realpath $(dir $(lastword ${MAKEFILE_LIST}))..)
+DAIKONDIR := $(realpath ${JAVA_MAKEFILE_DIR}..)
 
 DAIKONSCRIPTS ?= ${DAIKONDIR}/scripts
 
-PLUMESCRIPTS ?= ${DAIKONDIR}/.utils/plume-scripts
+PLUME_SCRIPTS ?= ${DAIKONDIR}/.utils/plume-scripts
 HTMLTOOLS ?= ${DAIKONDIR}/.utils/html-tools
 
 USER ?= daikonbuild
 
-JAVA ?= java -ea
+# These use the JDK at JAVA_HOME, which java-home.mk sets, so that they agree
+# with JAVA_RELEASE_NUMBER.  ("?=" defines a recursively expanded variable.)
+JAVA ?= ${JAVA_HOME_OR_ERROR}/bin/java -ea
 # For debugging, add -verbose flag to javac command
-# JAVAC ?= javac -g -Xlint:unchecked
-JAVAC ?= javac
-JAVADOC ?= javadoc
-JAR ?= jar
+# JAVAC ?= ${JAVA_HOME_OR_ERROR}/bin/javac -g -Xlint:unchecked
+JAVAC ?= ${JAVA_HOME_OR_ERROR}/bin/javac
+JAVADOC ?= ${JAVA_HOME_OR_ERROR}/bin/javadoc
+JAR ?= ${JAVA_HOME_OR_ERROR}/bin/jar
 
-# The "JAVANN" variables mean "at least version NN", except JAVA8.
-JAVA_VERSION_STRING_WITH_EA := $(shell javac -version 2>&1 | head -1 | cut "-d " -f2)
-JAVA_VERSION_STRING := $(shell javac -version 2>&1 | head -1 | cut "-d " -f2 | sed 's/-ea//')
-ifneq (,$(findstring start1.8,start${JAVA_VERSION_STRING}))
-  JAVA8 := 1
-  JAVA17 := 0
-  JAVA21 := 0
-  JAVA24 := 0
-  JAVA25 := 0
-  JAVA_RELEASE_NUMBER := 8
-else
-  JAVA8 := 0
-  JAVA17 := 0
-  JAVA21 := 0
-  JAVA24 := 0
-  JAVA25 := 0
-  JAVA_RELEASE_NUMBER := $(shell echo ${JAVA_VERSION_STRING} | sed 's/\([0-9]*\)\..*/\1/')
+BuildJDKTool = BuildJDK
+
+include ${DAIKONDIR}/java/java-home.mk
+
+ifeq (${JAVA24_OR_NEWER},1)
+  BuildJDKTool = BuildJDK24
 endif
-ifeq ($(shell test ${JAVA_RELEASE_NUMBER} -ge 17; echo $$?),0)
-  JAVA17 := 1
-endif
-ifeq ($(shell test ${JAVA_RELEASE_NUMBER} -ge 21; echo $$?),0)
-  JAVA21 := 1
-endif
-# Temporary, since Java 24 is not a LTS release.
-ifeq ($(shell test ${JAVA_RELEASE_NUMBER} -ge 24; echo $$?),0)
-  JAVA24 := 1
-endif
-ifeq ($(shell test ${JAVA_RELEASE_NUMBER} -ge 25; echo $$?),0)
-  JAVA25 := 1
+ifeq (${JAVA_RELEASE_NUMBER},25)
   ifndef JAVA25_HOME
     JAVA25_HOME := ${JAVA_HOME}
   endif
 endif
+# Use JAVA26_OR_NEWER, not JAVA27_OR_NEWER, so that JDK 26 has a value for the --system flag below.
+ifeq (${JAVA26_OR_NEWER},1)
+  ifndef JAVA27_HOME
+    JAVA27_HOME := ${JAVA_HOME}
+  endif
+endif
 
-ifeq ($(shell test ${JAVA_RELEASE_NUMBER} -gt 20; echo $$?),0)
+ifeq (${JAVA21_OR_NEWER},1)
   LINT_THIS_ESCAPE=-Xlint:-this-escape
 endif
 
@@ -66,14 +58,14 @@ OS_REL := $(shell sed -n -e 's/^VERSION_ID="\(.*\)"/\1/p' /etc/os-release)
 ## TODO: It would be better to use "-target 8" for all files EXCEPT those ending in "24.java".
 # Users can set JAVAC_TARGET_FLAGS, taking precedence over these settings.
 # Use "--source 25 --target 25" because Java 25 is an LTS version.
-ifeq (${JAVA25}, 1)
-  ifndef JAVA25_HOME
-    # If this happens, $JAVA_HOME must also be empty.
-    $(error JAVA25_HOME is not set; JAVA_HOME=${JAVA_HOME})
+ifeq (${JAVA25_OR_NEWER}, 1)
+  ifdef JAVA25_HOME
+    JAVAC_TARGET_FLAGS ?= --source 25 --target 25 --system ${JAVA25_HOME}
+  else ifdef JAVA27_HOME
+    JAVAC_TARGET_FLAGS ?= --source 25 --target 25 --system ${JAVA27_HOME}
+  else
+    $(error Set JAVA25_HOME or JAVA27_HOME)
   endif
-  JAVAC_TARGET_FLAGS ?= --source 25 --target 25 --system ${JAVA25_HOME}
-else ifeq (${JAVA24}, 1)
-  JAVAC_TARGET_FLAGS ?= -source 24 -target 24
 else
   JAVAC_TARGET_FLAGS ?= -source 8 -target 8
 endif
@@ -108,30 +100,38 @@ CHECKERFRAMEWORK_JAVAC ?= ${CHECKERFRAMEWORK_JAR_DIR}/javac.jar
 ## Classpath
 
 ## Daikon compiled files
-ifeq "$(wildcard ${DAIKONDIR}/java/lib/daikon-plumelib.jar)" "${DAIKONDIR}/java/lib/daikon-plumelib.jar"
-  # Add jar files that only exist for the development version, not the
-  # distributed version, of Daikon.  The if clause avoids a (harmless but
-  # annoying) javac error message that they don't exist.
-  # This classpath is a problem, because CHECKERFRAMEWORK_JAR may have
-  # a different version of a plume-lib library than java/lib/* does.
-  # One (unclean) approach is to update them simultaneously.  Does that even work?
-  DAIKON_CLASSPATH := ${CHECKERFRAMEWORK_JAR}:${DAIKONDIR}/java/lib/*:${DAIKONDIR}/java
-else
-  DAIKON_CLASSPATH := ${DAIKONDIR}/java
-endif
+##
+## lib/ holds two JUnit distributions, because Daikon needs both versions:
+##   * junit-4.13.2-Daikon.jar is JUnit 4, which Daikon's own unit tests use; `make junit` runs
+##     them with org.junit.runner.JUnitCore.
+##   * junit-platform-console-standalone-1.9.0-Daikon.jar is JUnit 5, used by
+##     tests/daikon-tests/junit5 via org.junit.platform.console.ConsoleLauncher.
+## The second is a "standalone" distribution, so as well as JUnit 5 it bundles complete copies of
+## JUnit 4 and hamcrest -- that is how it runs JUnit 4 tests through the vintage engine.  Those
+## bundled copies are not the ones we want: they are the original Java 5 class files (major
+## version 49), whereas our junit-4 and hamcrest jars are rebuilt as Java 8 (major version 52),
+## and our JUnit 4 is additionally annotated for the Checker Framework -- without those
+## annotations, assertNotNull's second parameter reads as @NonNull and typecheck-part1 fails on
+## code that passes elsewhere.
+##
+## The JVM expands "lib/*" in an unspecified order, so which copy is found first varies from
+## machine to machine.  Name our jars ahead of the wildcard so they always win; the first match on
+## the classpath is the one that is used.  The versions are spelled out rather than globbed:
+## 4.13.2 is the final release of JUnit 4, so that name cannot go stale.  hamcrest-core 1.3 is not
+## the newest release, but Daikon has no plans to move off it -- if it is ever upgraded, change the
+## name here too.  A classpath entry naming a file that does not exist is ignored silently, so a
+## stale name would not fail the build; it would quietly let the bundled copy win again.
+##
+## The daikon.jar rule in the top-level Makefile has long applied the same policy by the opposite
+## mechanism: it extracts lib/*.jar, then hamcrest*.jar, then junit-4*.jar, so the later
+## extractions overwrite the earlier ones.  Last-wins-on-extract and first-wins-on-classpath give
+## the same precedence -- JUnit 4, then hamcrest, then everything else.  Keep the two in step.
+##
+## The Checker Framework jar comes first so that its qualifiers, which may be newer than those in
+## lib/checker-qual.jar, are found both when compiling and when type-checking.
+DAIKON_CLASSPATH := ${CHECKERFRAMEWORK_JAR}:${DAIKONDIR}/java/lib/junit-4.13.2-Daikon.jar:${DAIKONDIR}/java/lib/hamcrest-core-1.3-Daikon.jar:${DAIKONDIR}/java/lib/*:${DAIKONDIR}/java
 
 ## Add tools.jar and rt.jar, if they exist
-ifeq ($(shell uname), Darwin)
-  JAVA_HOME ?= $(/usr/libexec/java_home)
-else
-ifeq ($(shell which javac > /dev/null 2>&1 && echo found || echo nonexistent), found)
-  JAVA_HOME ?= $(shell readlink -f $(shell which javac) | sed "s:/bin/javac::")
-else
-  $(info Failure: Here is the output of: which javac)
-  $(info $(shell which javac))
-  $(error 'which javac' had exit status 1)
-endif
-endif
 ifneq "$(wildcard ${JAVA_HOME}/lib/tools.jar)" ""
   DAIKON_CLASSPATH := ${DAIKON_CLASSPATH}:${JAVA_HOME}/lib/tools.jar
 endif
@@ -139,15 +139,15 @@ ifneq "$(wildcard ${JAVA_HOME}/jre/lib/rt.jar)" ""
   DAIKON_CLASSPATH := ${DAIKON_CLASSPATH}:${JAVA_HOME}/jre/lib/rt.jar
 endif
 
-JAVADOC_COMMAND := ${JAVADOC} -cp ${DAIKON_CLASSPATH}
-JAVAC_COMMAND := ${JAVAC} -cp ${DAIKON_CLASSPATH} -Xlint -J-Xmx7g ${JAVAC_ARGS}
-JAVA_COMMAND := ${JAVA} -cp ${DAIKON_CLASSPATH}
+JAVADOC_COMMAND = ${JAVADOC} -cp ${DAIKON_CLASSPATH}
+JAVAC_COMMAND = ${JAVAC} -cp ${DAIKON_CLASSPATH} -Xlint -J-Xmx7g ${JAVAC_ARGS}
+JAVA_COMMAND = ${JAVA} -cp ${DAIKON_CLASSPATH}
 
-DOCLETPATH := ${DAIKONDIR}/java:$(wildcard ${DAIKONDIR}/java/lib/bcel-util-*.jar):$(wildcard ${DAIKONDIR}/java/lib/plume-util-*.jar):$(wildcard ${DAIKONDIR}/java/lib/reflection-util-*.jar):$(wildcard ${DAIKONDIR}/java/lib/hashmap-util-*.jar):${DAIKONDIR}/java/lib/daikon-plumelib.jar
+DOCLETPATH := ${DAIKONDIR}/java:$(wildcard ${DAIKONDIR}/java/lib/java-getopt-*.jar):$(wildcard ${DAIKONDIR}/java/lib/bcel-util-*.jar):$(wildcard ${DAIKONDIR}/java/lib/plume-util-*.jar):$(wildcard ${DAIKONDIR}/java/lib/reflection-util-*.jar):$(wildcard ${DAIKONDIR}/java/lib/hashmap-util-*.jar):${DAIKONDIR}/java/lib/daikon-plumelib.jar
 
 DOCLET_FLAGS :=
 LINKOFFLINE := https://docs.oracle.com/javase/8/docs/api/
-ifeq ($(shell expr ${JAVA_RELEASE_NUMBER} \>= 11),1)
+ifeq (${JAVA11_OR_NEWER},1)
   DOCLET_FLAGS := --add-exports jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED
   LINKOFFLINE := https://docs.oracle.com/en/java/javase/17/docs/api/
 endif
@@ -159,13 +159,13 @@ endif
 # find command will get run multiple times.  USE AUTO_GENERATED_FILES instead.
 # "-o -path './jakarta-oro*/src/java/examples'" does not work for non-GNU find.
 # " | perl -pi -e 's/^\.\///g'" to remove leading "./"
-SORT_DIRECTORY_ORDER := ${PLUMESCRIPTS}/sort-directory-order
+SORT_DIRECTORY_ORDER := ${PLUME_SCRIPTS}/sort-directory-order
 ifneq "$(wildcard ${SORT_DIRECTORY_ORDER})" "${SORT_DIRECTORY_ORDER}"
-  # Until "make ../plume-scripts" has been run, sort-directory-order is not available.
+  # Until "make ${PLUME_SCRIPTS}" has been run, sort-directory-order is not available.
   SORT_DIRECTORY_ORDER := sort
 endif
 
-ifeq (${JAVA8}, 1)
+ifeq (${JAVA_RELEASE_NUMBER},8)
 dummy := $(shell cp -pf daikon/config/InvariantDoclet.java8 daikon/config/InvariantDoclet.java)
 dummy := $(shell cp -pf daikon/config/ParameterDoclet.java8 daikon/config/ParameterDoclet.java)
 else
@@ -174,21 +174,21 @@ dummy := $(shell cp -pf daikon/config/ParameterDoclet.java11 daikon/config/Param
 endif
 
 DAIKON_JAVA_FILES := $(shell find daikon/ -name '*.java' -not -name '*\#*' -print | ${SORT_DIRECTORY_ORDER})
-ifeq (${JAVA24}, 0)
+ifeq (${JAVA24_OR_NEWER}, 0)
   DAIKON_JAVA_FILES :=  $(filter-out %24.java, ${DAIKON_JAVA_FILES})
 endif
 JAVA_FILES := $(shell find . -follow \( -name '*daikon-java*' -o -name '*daikon-instrumented*' -o -name 'PrototypeChecker.java' -o -name 'VIndexChecker.java' -o -name 'VIndexAnnotatedTypeFactory.java' -o -name 'ReturnBytecodes.java' -o -name 'SplitterFactoryTest.java' -o -name '\.\#*' \) -prune -o -name '*.java' -print | grep -v '/jakarta-oro.*/src/java/examples/' | ${SORT_DIRECTORY_ORDER})
-ifeq (${JAVA24}, 0)
+ifeq (${JAVA24_OR_NEWER}, 0)
   JAVA_FILES :=  $(filter-out %24.java, ${JAVA_FILES})
 endif
 JAVA_FILES_FOR_DEPENDENCES := $(filter-out daikon/test/split/SplitterFactoryTestUpdater.java, $(filter-out daikon/test/split/SplitterFactoryTest.java, ${JAVA_FILES}))
 JAVA_FILES_FOR_STYLE := $(shell find . -follow \( -name '*daikon-java*' -o -name '*daikon-instrumented*' -o -name 'PrototypeChecker.java' -o -name 'VIndexChecker.java' -o -name 'VIndexAnnotatedTypeFactory.java' -o -name 'ReturnBytecodes.java' -o -name 'SplitterFactoryTest.java' -o -name 'WeakHasherMap.java' -o -name 'WeakIdentityHashMap.java' -o -name '\.\#*' -o -path './jtb' -o -path './daikon/dcomp-transfer' \) -prune -o -name '*.java' -print | grep -v '/jakarta-oro.*/src/java/examples/' | ${SORT_DIRECTORY_ORDER})
-ifeq (${JAVA24}, 0)
+ifeq (${JAVA24_OR_NEWER}, 0)
   JAVA_FILES_FOR_STYLE :=  $(filter-out %24.java, ${JAVA_FILES_FOR_STYLE})
 endif
 # Other find commands should perhaps use the recursive grep form instead
 JAVA_FILES_FOR_FORMAT := $(shell grep -r --include '*.java' --exclude-dir '*daikon-java*' --exclude-dir '*daikon-instrumented*' --exclude WeakHasherMap.java --exclude WeakIdentityHashMap.java --exclude InvariantDoclet.java --exclude ParameterDoclet.java -L 'This file is automatically generated' . | grep -v "^./jtb" | ${SORT_DIRECTORY_ORDER})
-ifeq (${JAVA24}, 0)
+ifeq (${JAVA24_OR_NEWER}, 0)
   JAVA_FILES_FOR_FORMAT :=  $(filter-out %24.java, ${JAVA_FILES_FOR_FORMAT})
 endif
 
@@ -464,7 +464,7 @@ export DAIKONDIR
 ### Test targets
 ###
 
-.PHONY: default all
+.PHONY: all test clean default
 default: daikon
 all: daikon
 
@@ -492,6 +492,14 @@ update-libs:
 ### Compilation targets
 ###
 
+# Non-empty when make does not run recipes:  "make -n" (dry run), "make -q"
+# (question), or "make -t" (touch).  Make still runs a recipe line that uses
+# ${MAKE} in those modes.  A sub-make that remakes a target in such a mode must
+# not regress by remaking a prerequisite that the parent make did not create.
+# See the rule for daikon/Daikon.class, below.
+MAKEFLAGS_SHORT := $(firstword -$(MAKEFLAGS))
+NO_RECIPES := $(findstring n,${MAKEFLAGS_SHORT})$(findstring q,${MAKEFLAGS_SHORT})$(findstring t,${MAKEFLAGS_SHORT})
+
 # The timestamp of Daikon.class indicates the last time the system was recompiled.
 compile compile-java compile-daikon: daikon/Daikon.class
 daikon/Daikon.class: daikon/Daikon.java ${AUTO_GENERATED_FILES} ${JAVA_FILES_FOR_DEPENDENCES}
@@ -500,9 +508,16 @@ daikon/Daikon.class: daikon/Daikon.java ${AUTO_GENERATED_FILES} ${JAVA_FILES_FOR
 	${JAVAC_COMMAND} @java_files.txt
 	rm -f java_files.txt
 	touch $@
-	${MAKE} rename-dcruntime ${AUTO_GENERATED_CLASSES_2}
+# When make does not run recipes, daikon/Daikon.class remains out of date, so a
+# sub-make would remake daikon/Daikon.class (and run this recipe again), without
+# end.  "-W" makes the sub-make treat daikon/Daikon.class as just modified, so
+# it does not remake daikon/Daikon.class but still reports the work that depends
+# on it.
+	${MAKE} $(if ${NO_RECIPES},-W $@) rename-dcruntime ${AUTO_GENERATED_CLASSES_2}
 # on some systems chmod with symbolic arguments pays attention to umask.  so use 444 instead of -w
 	@chmod 444 ${AUTO_GENERATED_FILES}
+# These can't be prerequisites because they depend on .class files from Daikon itself.
+	${MAKE} $(if ${NO_RECIPES},-W $@) ChicoryPremain.jar dcomp_premain.jar
 
 .PHONY: rename-dcruntime
 rename-dcruntime:
@@ -524,7 +539,7 @@ rename-dcruntime:
 # Chicory java front end for Daikon
 #
 CHICORY_JAVA_FILES := daikon/Chicory.java $(wildcard daikon/chicory/*.java)
-ifeq (${JAVA24}, 0)
+ifeq (${JAVA24_OR_NEWER}, 0)
 CHICORY_JAVA_FILES := $(filter-out %24.java, ${CHICORY_JAVA_FILES})
 endif
 
@@ -535,13 +550,16 @@ endif
 # compiled, but changing JDKs doesn't cause this Makefile to otherwise
 # trigger re-execution.
 .PRECIOUS: ChicoryPremain.jar
-ChicoryPremain.jar : daikon/Chicory.class daikon/chicory/manifest.txt
+ChicoryPremain.jar : daikon/Daikon.class daikon/chicory/manifest.txt
 	${JAR} cfm ChicoryPremain.jar daikon/chicory/manifest.txt \
 	  daikon/chicory/ChicoryPremain.class
 
-.PHONY: chicory chicory-test
-chicory chicory-test : daikon/chicory/inv_out.diff
-daikon/chicory/inv_out.diff : ChicoryPremain.jar daikon/Daikon.class
+.PHONY: chicory
+chicory: ChicoryPremain.jar
+
+.PHONY: chicory-test
+chicory-test: daikon/chicory/inv_out.diff
+daikon/chicory/inv_out.diff: ChicoryPremain.jar
 	cd daikon/chicory && rm -f ChicoryTest.log ChicoryTest.dtrace.gz ChicoryTest.inv.gz ChicoryTest.inv.out
 	cd daikon/chicory && ${JAVA_COMMAND} daikon.Chicory --verbose --debug daikon.chicory.ChicoryTest > ChicoryTest.log || (cat ChicoryTest.log; false)
 	cd daikon/chicory && ${JAVA_COMMAND} daikon.Daikon --no_text_output --no_show_progress ChicoryTest.dtrace.gz
@@ -555,7 +573,7 @@ daikon/chicory/inv_out.diff : ChicoryPremain.jar daikon/Daikon.class
 # Dynamic Comparability (DynComp/Java; also Chicory)
 #
 INSTRUMENTATION_JAVA_FILES := daikon/DynComp.java $(wildcard daikon/dcomp/*.java daikon/chicory/*.java)
-ifeq (${JAVA24}, 0)
+ifeq (${JAVA24_OR_NEWER}, 0)
 INSTRUMENTATION_JAVA_FILES := $(filter-out %24.java, ${INSTRUMENTATION_JAVA_FILES})
 endif
 
@@ -608,7 +626,7 @@ dyncomp-jdk dcomp-jdk   : dcomp_rt.jar
 ${DCOMP_RT} dcomp_rt.jar : dcomp_premain.jar
 	/bin/rm -rf ${DCOMP_RT}
 	${INSTALL} -d ${DCOMP_RT}
-	${JAVA_COMMAND} -Xmx7g daikon.dcomp.BuildJDK ${DCOMP_RT}
+	${JAVA_COMMAND} -Xmx7g daikon.dcomp.${BuildJDKTool} ${DCOMP_RT}
 # "then" clause is Java 8, "else" clause is Java 9+.
 # For Java 9+, there appears to be a bug in the Java reflection invoke code that it
 # does not check that the arg list matches.  Hence, it tries to invoke
@@ -639,15 +657,14 @@ dyncomp-jdk-only dcomp-jdk-only :
 	fi
 
 ## These two rules create the directories if absent but don't update them.
-../.utils/plume-scripts:
-	${MAKE} -C .. update-plume-scripts-in-utils
-
+${PLUME_SCRIPTS}:
+	${MAKE} -C .. update-plume-scripts
 ../.utils/html-tools:
 	${MAKE} -C .. update-html-tools
 
-.PHONY: update-plume-scripts-in-utils
-update-plume-scripts-in-utils:
-	${MAKE} -C .. update-plume-scripts-in-utils
+.PHONY: update-plume-scripts
+update-plume-scripts:
+	${MAKE} -C .. update-plume-scripts
 
 # Checks that daikon.plumelib, rather than plume, is imported by source files
 # that do instrumentation.  Should also check that daikon.plumelib is never
@@ -669,7 +686,7 @@ plume-import-check :
 
 ## Use this when you don't want $inv/tests makefiles to restart
 JAVA_FILES_EXCEPT_DAIKON := $(subst ./daikon/Daikon.java,,${JAVA_FILES})
-all_except_daikon: ../.utils/plume-scripts ${AUTO_GENERATED_FILES}
+all_except_daikon: ${PLUME_SCRIPTS} ${AUTO_GENERATED_FILES}
 	@echo ${JAVAC_COMMAND} '*.java ... (except Daikon.java)'
 	@${JAVAC_COMMAND} ${JAVA_FILES_EXCEPT_DAIKON}
 	@chmod a-w ${AUTO_GENERATED_FILES}
@@ -689,12 +706,12 @@ all_except_daikon: ../.utils/plume-scripts ${AUTO_GENERATED_FILES}
 # The (slight) downside is that the regenerated .class files might cause some
 # Make rules to unnecessarily re-run, if the code hasn't actually changed.
 clean_class_files:
-# remove 'bin' and 'orig' after versions stablize
+# remove 'bin' and 'orig' after versions stabilize
 	-rm -f `find . -path "*/debug*/bin" -prune -o -path "*/debug*/orig" -prune -o -path "*/debug*/instrumented" -prune -o -path "*/debug*/uninstrumented" -prune -o -name "*.class" -print`
 	# java/daikon might be a symbolic link; the alternative is to pass
 	# "-follow" to the above find command, but I don't necessarily
 	# want to remove everything reachable through symbolic links.
-# remove 'bin' and 'orig' after versions stablize
+# remove 'bin' and 'orig' after versions stabilize
 	-rm -f `find daikon -follow -path "*/debug*/bin" -prune -o -path "*/debug*/orig" -prune -o -path "*/debug*/instrumented" -prune -o -path "*/debug*/uninstrumented" -prune -o -name "*.class" -print`
 	-rm -f ${OLD_AUTO_GENERATED_FILES}
 
@@ -706,7 +723,7 @@ clean:
 clean-generated-files:
 	-rm -f ${AUTO_GENERATED_FILES} ${AUTO_GENERATED_FILES_2}
 
-# Could/should remove plume-scripts here, too.
+# Could/should remove .utils here, too.
 veryclean: very_clean
 very_clean: very-clean
 very-clean: clean clean-generated-files
@@ -734,7 +751,7 @@ endif
 TAGS:	tags
 .PHONY: etags tags
 etags:	tags
-tags: ../.utils/plume-scripts
+tags: ${PLUME_SCRIPTS}
 ifndef ETAGS
 	$(error etags is not available, please install it)
 endif
@@ -750,7 +767,7 @@ tags-without-generated-files: clean-generated-files
 	${MAKE} compile
 
 # A TAGS file that does not contain jtb-generated files.
-tags-nojtb: ../.utils/plume-scripts
+tags-nojtb: ${PLUME_SCRIPTS}
 ifndef ETAGS
 	$(error etags is not available, please install it)
 endif
@@ -765,7 +782,7 @@ endif
 # See version numbers at https://github.com/google/error-prone/releases
 # and https://errorprone.info/docs/installation.
 # Only run under Java 21+.
-error-prone-version := 2.46.0
+error-prone-version := 2.50.0
 # "-XDaddTypeAnnotationsToSymbol=true" is only required under exactly Java 21,
 # but it's harmless (has no effect) on later versions of Java.
 extra-error-prone-args-1 := --should-stop=ifError=FLOW -XDaddTypeAnnotationsToSymbol=true
@@ -788,16 +805,17 @@ error-prone: errorprone
 errorprone: compile errorprone-nocompile
 # Some of the -Xep are temporary
 #   -Xep:PatternMatchingInstanceof:OFF  requires Java 17 source code
+#   -Xep:StringConcatToTextBlock:OFF  requires Java 15 source code (text blocks)
 errorprone-nocompile:
-ifneq (${JAVA21}, 1)
+ifneq (${JAVA21_OR_NEWER}, 1)
 	@echo "Error Prone is only run under Java 21+"
 else
 	@echo "Using Error Prone version ${error-prone-version}"
 ## MutablePublicArray is off because it suggests a dependency on Google Guava.
-	javac -cp ${DAIKON_CLASSPATH} \
+	${JAVAC} -cp ${DAIKON_CLASSPATH} \
 	  ${JAVAC_ANNOTATION_PROCESSOR_ARGS} \
 	  -XDcompilePolicy=simple -processorpath ${ERRORPRONE_PROCESSOR_PATH} \
-	  '-Xplugin:ErrorProne -Xep:ReferenceEquality:OFF -Xep:StringSplitter:OFF -Xep:AnnotateFormatMethod:OFF -Xep:MutablePublicArray:OFF -Xep:DoNotCallSuggester:OFF -Xep:InlineMeSuggester:OFF -Xep:CanIgnoreReturnValueSuggester:OFF -Xep:ExtendsObject:OFF -Xep:PatternMatchingInstanceof:OFF -Xep:StatementSwitchToExpressionSwitch:OFF' \
+	  '-Xplugin:ErrorProne -Xep:ReferenceEquality:OFF -Xep:StringSplitter:OFF -Xep:AnnotateFormatMethod:OFF -Xep:MutablePublicArray:OFF -Xep:DoNotCallSuggester:OFF -Xep:InlineMeSuggester:OFF -Xep:CanIgnoreReturnValueSuggester:OFF -Xep:ExtendsObject:OFF -Xep:PatternMatchingInstanceof:OFF -Xep:StatementSwitchToExpressionSwitch:OFF -Xep:StringConcatToTextBlock:OFF' \
 	  -Xmaxwarns 100000 \
 	  -Werror \
 	  ${extra-error-prone-args-1} \
@@ -807,7 +825,7 @@ endif
 # THIS IS BROKEN - IS IT EVER USED?
 # Create an `error-prone.patch` file.
 errorprone-replacements:
-	javac -cp ${DAIKON_CLASSPATH} \
+	${JAVAC} -cp ${DAIKON_CLASSPATH} \
 	  --add-exports jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED \
 	  --add-exports jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED \
 	  -XDcompilePolicy=simple -processorpath ${ERRORPRONE_PROCESSOR_PATH} \
@@ -837,7 +855,7 @@ findbugs-cat:
 
 .PHONY: jar
 jar: ../daikon.jar
-../daikon.jar: ../.utils/plume-scripts ${AUTO_GENERATED_FILES} compile
+../daikon.jar: ${PLUME_SCRIPTS} ${AUTO_GENERATED_FILES} compile
 	${MAKE} -C .. daikon.jar
 
 jlint:
@@ -852,9 +870,11 @@ audit:
 
 .PHONY: reformat check-format
 
+# google-java-format requires JDK 21 or later.  The scripts run the java on the
+# PATH, so put the JDK at JAVA_HOME (which determines JAVA21_OR_NEWER) first on the PATH.
 format: reformat
 reformat:
-ifeq (${JAVA17}, 0)
+ifeq (${JAVA21_OR_NEWER}, 0)
 	echo "Formatting is not run under Java ${JAVA_VERSION_STRING}"
 else
 	${MAKE} -C .. update-run-google-java-format
@@ -863,7 +883,7 @@ else
 endif
 
 check-format:
-ifeq (${JAVA17}, 0)
+ifeq (${JAVA21_OR_NEWER}, 0)
 	echo "Formatting is not run under Java ${JAVA_VERSION_STRING}"
 else
 	${MAKE} -C .. update-run-google-java-format
@@ -882,9 +902,9 @@ endif
 # override (not augment) any other use of -Alint in this Makefile.
 # "-proc:only" prevents generation of .class files (so generated classfiles are
 # version 8 rather than version 9, and so typecheck jobs can be run in parallel).
-# JAVACHECK_EXTRA_ARGS is set only by the user (and is currently used by Travis).
+# JAVACHECK_EXTRA_ARGS is set only by the user.
 CHECKER_ARGS_ALL_JDK_VERSIONS ?= -Xmaxerrs 10000 -Xmaxwarns 10000 -Aversion -ArequirePrefixInWarningSuppressions -AwarnUnneededSuppressions -AwarnRedundantAnnotations -XDignore.symbol.file -Xlint:deprecation -proc:only -processorpath ${CHECKERFRAMEWORK_JAR} ${JAVACHECK_EXTRA_ARGS}
-ifneq (,$(findstring 1.8.,$(shell java -version 2>&1)))
+ifeq (${JAVA_RELEASE_NUMBER},8)
   CHECKER_ARGS ?= ${CHECKER_ARGS_ALL_JDK_VERSIONS} -J-Xbootclasspath/p:${CHECKERFRAMEWORK_JAVAC}
 else
   CHECKER_ARGS ?= ${CHECKER_ARGS_ALL_JDK_VERSIONS} \
@@ -941,7 +961,7 @@ show_nullness_java_files:
 	@echo ${DAIKON_JAVA_FILES}
 
 ## TODO: Reinstate these dependencies later:  typecheck-prototype typecheck-vindex
-# Check is in multiple parts because Travis won't run jobs longer than 50 minutes
+# Check is in multiple parts to keep each CI job short
 # and because CI memory can get exhausted on multiple CI platforms (why?).
 # Index Checker takes much longer than any other checker.
 # Typechecking times (in minutes, as of 2025-11-03):
@@ -1170,29 +1190,32 @@ daikon-tests: smoke-test
 check-serialize:
 #	for each non-gui class, run serialver
 #	accept only "is not Serializable" or "UID = 200#####" as output
-# TODO: This produces ouput in nondeterministic order
+# TODO: This produces output in nondeterministic order
 	@find daikon -follow -name 'gui' -prune -o -name '*.class' -print | perl -ne 's|\.class\n$$||; s|/|.|g; print "Checking $$_... \t"; $$_ =~ s|\$$|\\\$$|g; $$msg =`serialver -J-Djava.compiler=NONE $$_ 2>&1`; if ($$msg =~ m/is not Serializable/) { print "ok (not serialized)\n"; next; } if ($$msg =~m/UID = (200\d[01]\d[0123]\d)L;/) { print "ok ($$1)\n"; next; }  print "WARNING: incorrect: $$msg";'
 
 
 .PHONY: junit
 junit: daikon/Daikon.class
+	@# This is not a prerequisite:  when the daikon/Daikon.class recipe runs, its
+	@# sub-make builds SplitterFactoryTest, and this make would redo that work.
+	${MAKE} ${AUTO_GENERATED_CLASSES_2}
 	@echo "Running unit (not system) tests..."
 	LC_ALL=en_US.UTF-8 ${JAVA_COMMAND} org.junit.runner.JUnitCore daikon.test.AllTestsSuite
-
-## TODO:  This target is never used!!!
-junit-all: junit
-	@# Alternately, MasterUnitTester could run SplitterFactoryTest,
-	@# but I'm having trouble with that, apparently due to hard-coded
-	@# directory paths.  And these tests are slow, so we want them to
-	@# be separate anyway.
-	${JAVA_COMMAND} daikon.test.split.SplitterFactoryTest
+ifeq (${JAVA24_OR_NEWER}, 1)
+	@# These tests are not in AllTestsSuite, because AllTestsSuite must compile
+	@# under versions of Java that do not have java.lang.classfile.
+	LC_ALL=en_US.UTF-8 ${JAVA_COMMAND} org.junit.runner.JUnitCore daikon.test.AllTestsSuite24
+endif
+	@# SplitterFactoryTest is not in AllTestsSuite, because SplitterFactoryTest
+	@# is generated after the rest of Daikon (including AllTestsSuite) is compiled.
+	LC_ALL=en_US.UTF-8 ${JAVA_COMMAND} org.junit.runner.JUnitCore daikon.test.split.SplitterFactoryTest
 
 ###
 ### Clover (code coverage)
 ###
 
 CLOVER := ${HOME}/clover
-CLOVER_CMD := ${JAVA_COMMAND} -cp ${CLOVER}/clover-1.3.1/lib/clover.jar \
+CLOVER_CMD = ${JAVA_COMMAND} -cp ${CLOVER}/clover-1.3.1/lib/clover.jar \
 									com.cenqua.clover.CloverInstr -jdk14
 CLOVER_CP := $(subst ${DAIKONDIR}/java,${CLOVER}/java,${DAIKON_CLASSPATH})
 CLOVER_CP := ${CLOVER_CP}:${CLOVER}/clover-1.3.1/lib/clover.jar
@@ -1244,21 +1267,28 @@ DAIKON_PACKAGES := $(shell ls -F daikon | grep / | egrep -v 'util' | egrep -v 'd
 javadoc-files.txt:
 	${MAKE} ${AUTO_GENERATED_FILES}
 	find * \( -name 'PrototypeChecker.java' -o -name 'VIndexChecker.java' -o -name 'VIndexAnnotatedTypeFactory.java' -o -path 'daikon/dcomp-transfer' \) -prune -o -name "*24.java" -prune -o -name "*.java" -print | ${SORT_DIRECTORY_ORDER} > javadoc-files.txt
-ifeq (${JAVA24}, 1)
+ifeq (${JAVA24_OR_NEWER}, 1)
 	find * -name "*24.java" -print | ${SORT_DIRECTORY_ORDER} >> javadoc-files.txt
 endif
 
 # If Java 8, don't run javadoc; a bug in javadoc causes it to crash.
-ifeq (${JAVA8}, 1)
+ifeq (${JAVA_RELEASE_NUMBER},8)
   SKIP_JAVADOC=1
+endif
+
+# Fails if the api target would skip javadoc.
+.PHONY: check-javadoc-enabled
+check-javadoc-enabled:
+ifeq (${SKIP_JAVADOC},1)
+	$(error Javadoc is disabled (Java 8, or SKIP_JAVADOC=1); use Java 11 or later)
 endif
 
 # Build javadoc using the daikon package and all subpackages of daikon.
 javadoc: api
 .PHONY: api
-api: ../.utils/plume-scripts ../.utils/html-tools ${AUTO_GENERATED_FILES}
+api: ${PLUME_SCRIPTS} ../.utils/html-tools ${AUTO_GENERATED_FILES}
 ifeq (${SKIP_JAVADOC},1)
-	java -version
+	${JAVA_HOME_OR_ERROR}/bin/java -version
 	@echo SKIP_JAVADOC=${SKIP_JAVADOC}
 	@echo Skipping javadoc on JDK 1.8 because of https://bugs.openjdk.java.net/browse/JDK-8215542
 else
@@ -1267,7 +1297,7 @@ else
 	${JAVADOC_COMMAND} -J-Xmx7g -J-ea ${JAVADOC_FLAGS} -Xdoclint:all ${DOCLET_FLAGS} \
 		@javadoc-files.txt
 	@rm -f javadoc-files.txt
-	cd ${JAVADOC_DEST} && ${PLUMESCRIPTS}/preplace '^ *&#64;cindex.*' ''
+	cd ${JAVADOC_DEST} && ${PLUME_SCRIPTS}/preplace '^ *&#64;cindex.*' ''
 	cp -pf ../doc/daikon-favicon.png ${JAVADOC_DEST}
 	cd ${JAVADOC_DEST} && ${HTMLTOOLS}/html-add-favicon . daikon-favicon.png
 endif
@@ -1275,9 +1305,9 @@ endif
 # Run Javadoc on each file individually, to determine which one is crashing Javadoc.
 # Search the *-javadoc-output.txt files to find out which one contains the crash log.
 # Then, you need to do binary search on that file.
-api-test-each: ../.utils/plume-scripts ../.utils/html-tools ${AUTO_GENERATED_FILES}
+api-test-each: ${PLUME_SCRIPTS} ../.utils/html-tools ${AUTO_GENERATED_FILES}
 ifeq (${SKIP_JAVADOC},1)
-	java -version
+	${JAVA_HOME_OR_ERROR}/bin/java -version
 	@echo SKIP_JAVADOC=${SKIP_JAVADOC}
 	@echo Skipping javadoc on JDK 1.8 because of https://bugs.openjdk.java.net/browse/JDK-8215542
 else
@@ -1289,14 +1319,14 @@ endif
 
 ## Make Javadoc with private fields for people working on source code.
 ## It is generated in the standard location, directory api/
-api-private: ../.utils/plume-scripts ${AUTO_GENERATED_FILES}
-ifeq ($(shell test ${JAVA_RELEASE_NUMBER} -eq 8; echo $$?),0)
+api-private: ${PLUME_SCRIPTS} ${AUTO_GENERATED_FILES}
+ifeq (${JAVA_RELEASE_NUMBER},8)
 	@echo "Skipping api-private target under Java 8"
 else
 	mkdir -p ${JAVADOC_DEST}
 	${JAVADOC_COMMAND} ${extra-javadoc-args} -J-Xmx7g -J-ea ${JAVADOC_FLAGS} -private -Xdoclint:all ${DOCLET_FLAGS} \
 	  daikon -subpackages ${DAIKON_PACKAGES}
-	cd ${JAVADOC_DEST} && ${PLUMESCRIPTS}/preplace '^ *&#64;cindex.*' ''
+	cd ${JAVADOC_DEST} && ${PLUME_SCRIPTS}/preplace '^ *&#64;cindex.*' ''
 endif
 
 ## Test that each program component is documented with Javadoc.
@@ -1319,7 +1349,7 @@ requireJavadoc: ${JAVA_FILES}
 	    ${DAIKON_JAVA_FILES} ; \
 	fi
 
-../doc/invariants-doc.texinfo: ../.utils/plume-scripts daikon/config/InvariantDoclet.class daikon/config/HtmlToTexinfo.class
+../doc/invariants-doc.texinfo: ${PLUME_SCRIPTS} daikon/config/InvariantDoclet.class daikon/config/HtmlToTexinfo.class
 	@make javadoc-files.txt
 	${JAVADOC_COMMAND} ${extra-javadoc-args} -J-Xmx7g -J-ea -docletpath "${DOCLETPATH}" -classpath "${DAIKON_CLASSPATH}" -doclet daikon.config.InvariantDoclet ${DOCLET_FLAGS} \
 		--texinfo $@.tmp \
@@ -1330,7 +1360,7 @@ requireJavadoc: ${JAVA_FILES}
 # This fails if both . and pwd are on CLASSPATH:  classes are found twice
 # resulting in a duplicate class warning.
 
-../doc/config-options.texinfo: ../.utils/plume-scripts daikon/config/ParameterDoclet.class daikon/config/HtmlToTexinfo.class
+../doc/config-options.texinfo: ${PLUME_SCRIPTS} daikon/config/ParameterDoclet.class daikon/config/HtmlToTexinfo.class
 	@make javadoc-files.txt
 	${JAVADOC_COMMAND} ${extra-javadoc-args} -J-Xmx7g -J-ea -docletpath "${DOCLETPATH}" -classpath "${DAIKON_CLASSPATH}" -doclet daikon.config.ParameterDoclet ${DOCLET_FLAGS} \
 		--texinfo $@.tmp \
@@ -1359,17 +1389,15 @@ showvars:
 	@echo PATH = $${PATH}
 
 	@echo JAVA_HOME = ${JAVA_HOME}
-	which java
-	java -version 2>&1
-	which javac
-	javac -version
+	${JAVA_HOME}/bin/java -version 2>&1
+	${JAVA_HOME}/bin/javac -version
 	@echo JAVA = ${JAVA}
 	@echo JAVA_COMMAND = ${JAVA_COMMAND}
 	@echo JAVAC = ${JAVAC}
 	@echo JAVAC_ARGS = ${JAVAC_ARGS}
 	@echo JAVAC_COMMAND = ${JAVAC_COMMAND}
 	@echo SKIP_JAVADOC = ${SKIP_JAVADOC}
-	@echo JAVA24 = ${JAVA24}
+	@echo JAVA24_OR_NEWER = ${JAVA24_OR_NEWER}
 
 	@echo CLASSPATH = "${CLASSPATH}"
 	@echo DAIKON_CLASSPATH = "${DAIKON_CLASSPATH}"
@@ -1378,7 +1406,7 @@ showvars:
 	@echo AUTO_GENERATED_FILES = ${AUTO_GENERATED_FILES}
 	@echo DAIKONDIR = "${DAIKONDIR}"
 	@echo DAIKONSCRIPTS = ${DAIKONSCRIPTS}
-	@echo PLUMESCRIPTS = ${PLUMESCRIPTS}
+	@echo PLUME_SCRIPTS = ${PLUME_SCRIPTS}
 
 	@echo DAIKON_PACKAGES = ${DAIKON_PACKAGES}
 	@echo DAIKON_JAVA_FILES = ${DAIKON_JAVA_FILES}
@@ -1414,29 +1442,48 @@ list_java_files: showvar_JAVA_FILES
 ### Automatically generated files
 ###
 
-# This must NOT depend on "daikon/Daikon.class", as that would lead to infinite regress.
-daikon/test/split/SplitterFactoryTestUpdater.class: daikon/test/split/SplitterFactoryTestUpdater.java
+# The updater uses Daikon's classes, so it must be compiled after Daikon; this order-only
+# prerequisite also orders the SplitterFactoryTest rules after Daikon, even under "make -j".
+daikon/test/split/SplitterFactoryTestUpdater.class: daikon/test/split/SplitterFactoryTestUpdater.java | daikon/Daikon.class
 	${JAVAC_COMMAND} $<
 
 ## First, a file not generated via java-cpp.
-daikon/test/split/SplitterFactoryTest.java: daikon/test/split/SplitterFactoryTestUpdater.class
+# Depending on daikon/Daikon.class regenerates the test whenever Daikon is
+# recompiled, because SplitterFactory determines which splitters the test covers.
+# The rule for daikon/Daikon.class makes this file only after touching
+# daikon/Daikon.class (or, when make does not run recipes, passing "-W
+# daikon/Daikon.class"; see NO_RECIPES), so this prerequisite does not cause a
+# regress.
+# SPLITTER_UPDATER_ARGS is set by the update-splitter-goals target.
+daikon/test/split/SplitterFactoryTest.java: daikon/Daikon.class \
+		daikon/test/split/SplitterFactoryTestUpdater.class \
+		$(wildcard daikon/test/split/targets/*.spinfo daikon/test/split/targets/*.decls)
 	rm -f $@
 # Has expected errors while compiling splitter files.
 # Suppress output unless whole command fails.
-	(${JAVA_COMMAND} daikon.test.split.SplitterFactoryTestUpdater > /dev/null 2>&1) || ${JAVA_COMMAND} daikon.test.split.SplitterFactoryTestUpdater
+	(${JAVA_COMMAND} daikon.test.split.SplitterFactoryTestUpdater ${SPLITTER_UPDATER_ARGS} > /dev/null 2>&1) \
+	  || ${JAVA_COMMAND} daikon.test.split.SplitterFactoryTestUpdater ${SPLITTER_UPDATER_ARGS}
 	chmod a-w $@
 
-${AUTO_GENERATED_CLASSES_2}: ${AUTO_GENERATED_FILES_2}
+# SplitterFactoryTest calls Daikon's methods, so recompile it when Daikon changes.
+${AUTO_GENERATED_CLASSES_2}: ${AUTO_GENERATED_FILES_2} daikon/Daikon.class
 	${JAVAC_COMMAND} ${AUTO_GENERATED_FILES_2}
+
+# Overwrites SplitterFactoryTest's goal files with the current SplitterFactory output.
+# Examine the differences (e.g., with "git diff") before committing them.
+.PHONY: update-splitter-goals
+update-splitter-goals: daikon/Daikon.class daikon/test/split/SplitterFactoryTestUpdater.class
+	rm -f daikon/test/split/SplitterFactoryTest.java
+	${MAKE} SPLITTER_UPDATER_ARGS=--update-goals ${AUTO_GENERATED_CLASSES_2}
 
 # Create the auto-generated files with jpp
 .PHONY: jpp
-jpp: ../.utils/plume-scripts ${AUTO_GENERATED_FILES}
+jpp: ${PLUME_SCRIPTS} ${AUTO_GENERATED_FILES}
 
 # Use this rule if you do not have cpp or for some other reason do not want
 # to refresh the automatically generated .java files.  You should not do
 # this if those files are not up-to-date (that is, if you have modified the
-# .jpp files).  It is safe to do this with a distrubution that you have
+# .jpp files).  It is safe to do this with a distribution that you have
 # just unpacked.
 avoid-jpp:
 	@echo "Any recent changes in the .jpp files will not get propagated."
@@ -1450,7 +1497,7 @@ avoid-jpp:
 # This rule does not work with make 3.77, but does work with make 3.78.
 JAVA_CPP ?= (rm -f $@; ${DAIKONSCRIPTS}/java-cpp -DDEFINEDVAR $< 2>&1 > $@ && chmod a-w $@)
 # Like the above, but also makes a backup file
-# JAVA_CPP = (mv -f $@ $@-bak; set -e; ${PLUMESCRIPTS}/java-cpp -DDEFINEDVAR $< > $@; chmod a-w $@)
+# JAVA_CPP = (mv -f $@ $@-bak; set -e; ${PLUME_SCRIPTS}/java-cpp -DDEFINEDVAR $< > $@; chmod a-w $@)
 
 # JAVA_CPP = (cp -pf $@ $@-bak; set -e; java-cpp $< -DDEFINEDVAR > $@-postproc; mv -f $@-postproc $@; chmod a-w $@)
 ## Here are alternate ways of writing the same command:
@@ -2060,6 +2107,21 @@ daikon/derive/unary/SequenceInitialFactory.java: daikon/derive/unary/SequenceIni
 
 daikon/derive/unary/SequenceInitialFactoryFloat.java: daikon/derive/unary/SequenceInitialFactory.java.jpp
 	$(JAVA_CPP:DEFINEDVAR=TYPEDOUBLE)
+
+
+###########################################################################
+### Diffs
+###
+
+# Don't diff StackMapUtils24.java, ClassGen24.java, MethodGen24.java, or
+# OperandStack24.java, because there are too many differences between the
+# upstream version (in BCEL or in bcel-util) and the version in Daikon.
+.PHONY: diff24
+diff24:
+	-diff -u daikon/dcomp/Instrument.java daikon/dcomp/Instrument24.java
+	-diff -u daikon/dcomp/DCInstrument.java daikon/dcomp/DCInstrument24.java
+	-diff -u daikon/dcomp/BuildJDK.java daikon/dcomp/BuildJDK24.java
+	-diff -u daikon/chicory/Instrument.java daikon/chicory/Instrument24.java
 
 
 ###########################################################################

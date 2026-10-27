@@ -41,17 +41,17 @@ import org.checkerframework.checker.nullness.qual.NonNull;
 import org.checkerframework.checker.signature.qual.BinaryName;
 
 /**
- * BuildJDK uses {@link DCInstrument} to add comparability instrumentation to Java class files, then
- * stores the modified files into a directory identified by a (required) command line argument.
+ * Adds comparability instrumentation to Java class files, then stores the modified files into a
+ * directory identified by a (required) command line argument.
  *
- * <p>DCInstrument duplicates each method of a class file. The new methods are distinguished by the
- * addition of a final parameter of type DCompMarker and are instrumented to track comparability.
- * Based on its invocation arguments, DynComp will decide whether to call the instrumented or
- * uninstrumented version of a method.
+ * <p>Duplicates each method of a class file. The new methods are distinguished by the addition of a
+ * final parameter of type DCompMarker and are instrumented to track comparability. Based on its
+ * invocation arguments, DynComp will decide whether to call the instrumented or uninstrumented
+ * version of a method.
  */
-public class BuildJDK {
+public final class BuildJDK {
 
-  /** Creates a new BuildJDK. */
+  /** Do not instantiate from external code; only instantiate in {@link #main}. */
   private BuildJDK() {}
 
   /**
@@ -66,12 +66,19 @@ public class BuildJDK {
   /** Number of class files processed; used for progress display. */
   private int _numFilesProcessed = 0;
 
-  /** Name of file in output jar containing the static-fields map. */
+  /**
+   * Name of file in the output jar containing the static-fields map.
+   *
+   * <p>This is a map from field names to a unique integer id. It is created and used by {@link
+   * DCInstrument} when creating tag get and set accessor methods for each static field in a class.
+   * If we are rebuilding a instrumented JDK we need to read the map file in and then restore it
+   * after rebuilding the JDK.
+   */
   private static String static_field_id_filename = "dcomp_jdk_static_field_id";
 
   /**
    * Collects names of all methods that DCInstrument could not process. Should be empty. Format is
-   * &lt;fully-qualified class name&gt;.&lt;method name&gt;
+   * {@code <fully-qualified class name>.<method name>}.
    */
   private static List<String> skipped_methods = new ArrayList<>();
 
@@ -111,6 +118,10 @@ public class BuildJDK {
             DynComp.class,
             DCInstrument.class);
     String[] cl_args = options.parse(true, args);
+    if (DynComp.help) {
+      options.printUsage();
+      System.exit(0);
+    }
     if (cl_args.length < 1) {
       System.err.println("must specify destination dir");
       options.printUsage();
@@ -120,13 +131,16 @@ public class BuildJDK {
 
     File dest_dir = new File(cl_args[0]);
 
-    // Key is a class file name, value is a stream that opens that file name.
+    // Key is a class file name, jar entry name, or the file name within a jmod archive.  It is
+    // almost always identical to the name of the class it contains. Throughout the BuildJDK code we
+    // call this the 'classFileName'. We use this as the key to the class_stream_map and it maps to
+    // an InputStream that supplies the contents of the class file.
     //
     // <p>We want to share code to read and instrument the Java class file members of a jar file
     // (JDK 8) or a module file (JDK 9+). However, jar files and module files are located in two
     // completely different file systems. So we open an InputStream for each class file we wish to
-    // instrument and save it in the class_stream_map with the file name as the key. From that point
-    // the code to instrument a class file can be shared.
+    // instrument and save it in the class_stream_map with the file name as the key. From that
+    // point the code to instrument a class file can be shared.
     Map<String, InputStream> class_stream_map;
 
     if (cl_args.length > 1) {
@@ -179,7 +193,8 @@ public class BuildJDK {
       File jdk_classes_file = new File(dest_dir, "java/lang/jdk_classes.txt");
       System.out.printf("Writing a list of class names to %s%n", jdk_classes_file);
       // Class names are written in internal form.
-      try (PrintWriter pw = new PrintWriter(jdk_classes_file, UTF_8.name())) {
+      try (@SuppressWarnings("JdkObsolete") // Charset overload needs Java 10+; Daikon supports 8
+          PrintWriter pw = new PrintWriter(jdk_classes_file, UTF_8.name())) {
         for (String classFileName : class_stream_map.keySet()) {
           pw.println(removeSuffix(classFileName, ".class"));
         }
@@ -243,6 +258,8 @@ public class BuildJDK {
     Map<String, InputStream> class_stream_map = new HashMap<>();
     String jar_name = java_home + "/lib/rt.jar";
     System.out.printf("using jar file %s%n", jar_name);
+    // We intentionally do not close the jar file as we save
+    // input streams into it to be read later.
     try {
       JarFile jfile = new JarFile(jar_name);
       // Get each class to be instrumented and store it away
@@ -257,6 +274,7 @@ public class BuildJDK {
 
         // Get the InputStream for this file
         InputStream is = jfile.getInputStream(entry);
+        assert is != null : "@AssumeAssertion(nullness): entry was obtained from jfile.entries()";
         class_stream_map.put(entryName, is);
       }
     } catch (Exception e) {
@@ -268,8 +286,8 @@ public class BuildJDK {
   /**
    * For Java 9+ the Java runtime is located in a series of modules. At this time, we are only
    * pre-instrumenting the java.base module. This method initializes the DirectoryStream used to
-   * explore java.base. It calls gather_runtime_from_modules_directory to process the directory
-   * structure.
+   * explore java.base. It calls {@link #gather_runtime_from_modules_directory} to process the
+   * directory structure.
    *
    * @return a map from class file name to the associated InputStream
    */
@@ -297,7 +315,7 @@ public class BuildJDK {
    * directory tree, selects the classes we want to instrument, creates an InputStream for each of
    * these classes, and adds this information to the {@code class_stream_map} argument.
    *
-   * @param path module file, which might be subdirectory
+   * @param path module file, which might be a subdirectory
    * @param modulePrefixLength length of "/module/..." path prefix before start of actual member
    *     path
    * @param class_stream_map a map from class file name to InputStream that collects the results
@@ -316,6 +334,15 @@ public class BuildJDK {
       }
     } else {
       String entryName = path.toString().substring(modulePrefixLength + 1);
+      // Note: java/lang/Object.class is added to class_stream_map
+      // so that it is included in the jdk_classes.txt list of pre-instrumented classes written out
+      // in main. Due to the way the JVM is loaded, we cannot instrument Object.class
+      // in instrument_classes(). However, we need it included in the
+      // pre-instrumented class list so that Instrument.transform will not
+      // attempt to instrument it live.
+      //
+      // Debugging code:
+      // System.out.printf("processing entry %s%n", entryName);
       try {
         // Get the InputStream for this file
         InputStream is = Files.newInputStream(path);
@@ -350,7 +377,8 @@ public class BuildJDK {
         }
 
         // Handle non-.class files and Object.class.  In JDK 8, copy them unchanged.
-        // For JDK 9+ we do not copy as these items will be loaded from the original module file.
+        // For JDK 9+ we do not copy them as these items will be loaded from the original module
+        // file. See {@link gather_runtime_from_modules_directory} for more details.
         if (!classFileName.endsWith(".class") || classFileName.equals("java/lang/Object.class")) {
           if (Runtime.isJava9orLater()) {
             if (verbose) {
@@ -459,7 +487,7 @@ public class BuildJDK {
   }
 
   /** Formats just the time part of a DateTime. */
-  private DateTimeFormatter timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss");
+  private static final DateTimeFormatter timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss");
 
   /**
    * Instruments the JavaClass {@code jc} (whose name is {@code classFileName}). Writes the
@@ -467,7 +495,7 @@ public class BuildJDK {
    *
    * @param jc JavaClass to be instrumented
    * @param outputDir output directory for instrumented class
-   * @param classFileName name of class to be instrumented
+   * @param classFileName class-file path or archive/module entry name to be instrumented
    * @param classTotal total number of classes to be processed; used for progress display
    * @throws IOException if unable to write out instrumented class
    */
@@ -480,7 +508,7 @@ public class BuildJDK {
     }
     DCInstrument dci = new DCInstrument(jc, true, null);
     JavaClass inst_jc;
-    inst_jc = dci.instrument_jdk();
+    inst_jc = dci.instrument_jdk_class();
     skipped_methods.addAll(dci.get_skipped_methods());
     File classfile = new File(classFileName);
     File dir;
@@ -547,7 +575,7 @@ public class BuildJDK {
    *
    * @param s a string
    * @param suffix a suffix
-   * @return {@code s}, with the suffix removed if it was present.
+   * @return {@code s}, with the suffix removed if it was present
    */
   private static String removeSuffix(String s, String suffix) {
     if (s.endsWith(suffix)) {

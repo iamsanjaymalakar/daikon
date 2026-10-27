@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.StringJoiner;
 import org.checkerframework.checker.interning.qual.Interned;
 import org.checkerframework.checker.nullness.qual.KeyFor;
 import org.checkerframework.checker.nullness.qual.NonNull;
@@ -33,7 +34,7 @@ public class AnnotateNullable {
 
   /** Do not instantiate. */
   private AnnotateNullable() {
-    throw new Error("Do not instantiate");
+    throw new UnsupportedOperationException("Do not instantiate");
   }
 
   // Why is this variable static?
@@ -63,12 +64,24 @@ public class AnnotateNullable {
   @Option("-n Insert NonNull as well as Nullable annotations")
   public static boolean nonnull_annotations = false;
 
+  /** If true, print a usage message and exit. */
+  @Option("-h Display usage information")
+  public static boolean help = false;
+
   public static void main(String[] args) throws IOException {
 
     Options options =
-        new Options("plume.AnnotateNullable [options] <inv_file>", AnnotateNullable.class);
+        new Options("daikon.AnnotateNullable [options] <inv_file>", AnnotateNullable.class);
     String[] inv_files = options.parse(true, args);
-    assert inv_files.length == 1;
+    if (help) {
+      options.printUsage();
+      System.exit(0);
+    }
+    if (inv_files.length != 1) {
+      System.err.println("must specify exactly one invariant file");
+      options.printUsage(System.err);
+      System.exit(1);
+    }
 
     // Read the serialized invariant file
     File inv_file = new File(inv_files[0]);
@@ -332,14 +345,13 @@ public class AnnotateNullable {
 
     // Print out the method declaration
     if (stub_format) {
-      System.out.printf(" %s %s(", return_annotation, ppt.ppt_name.getMethodName());
+      System.out.printf(" %s %s", return_annotation, ppt.ppt_name.getMethodName());
+      StringJoiner sj = new StringJoiner(", ", "(", ")");
       for (int i = 0; i < params.size(); i++) {
-        if (i != 0) {
-          System.out.printf(" ,");
-        }
-        System.out.printf("%s %s %s", annos.get(i), "type-goes-here", names.get(i));
+        sj.add(String.format("%s %s %s", annos.get(i), "type-goes-here", names.get(i)));
       }
-      System.out.printf("); // %d samples%n", ppt.num_samples());
+      System.out.printf("%s", sj);
+      System.out.printf("; // %d samples%n", ppt.num_samples());
     } else {
       System.out.printf("  method %s : // %d samples%n", jvm_signature(ppt), ppt.num_samples());
       System.out.printf("    return:%s%n", return_annotation);

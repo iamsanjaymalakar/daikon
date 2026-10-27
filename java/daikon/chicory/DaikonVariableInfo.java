@@ -69,18 +69,6 @@ public abstract class DaikonVariableInfo
   /** Default string for comparability info. */
   private static final String compareInfoDefaultString = "22";
 
-  // It's not enough to use one of the following 3 strings.
-  // You also need to set the flags that are returned by get_var_flags()!
-
-  /** Indicates that a given variable is non-null. */
-  protected static final String isNonNullString = " # isNonNull=true";
-
-  /** Indicates that a given variable is a parameter to a method. */
-  protected static final String isParamString = " # isParam=true";
-
-  /** Indicates that a given variable is non-null and a parameter. */
-  protected static final String isNonNullParamString = " # isNonNull=true, isParam=true";
-
   // Certain hardcoded class names
   protected static final String classClassName = "java.lang.Class";
   protected static final String stringClassName = "java.lang.String";
@@ -91,13 +79,7 @@ public abstract class DaikonVariableInfo
 
   public static final String class_suffix_relative_name = class_suffix.substring(1);
 
-  /**
-   * The printed type that will appear in the .decls declaration. May include aux information at the
-   * end, such as isParamString.
-   *
-   * @see #getTypeName()
-   * @see #getTypeNameOnly()
-   */
+  /** The printed type that will appear in the .decls declaration. */
   protected String typeName;
 
   /** The printed representation type that will appear in the .decls declaration. */
@@ -127,6 +109,13 @@ public abstract class DaikonVariableInfo
    * (if the field is in a class in a different package, it is only visible if public, etc.).
    */
   public static boolean std_visibility = false;
+
+  /**
+   * If true, never create a variable whose value is obtained by calling a method of the target
+   * program's objects. For example, do not create a variable for the elements of a {@code
+   * java.util.List}, whose value is obtained by calling {@code toArray()}.
+   */
+  public static boolean no_method_calls = false;
 
   /**
    * Set of fully qualified static variable names for this ppt. Used to ensure that each static is
@@ -208,7 +197,7 @@ public abstract class DaikonVariableInfo
   }
 
   /**
-   * Returns a string representation of this node, with its identity hash code
+   * Returns a string representation of this node, with its identity hash code.
    *
    * <p>This implementation returns its run-time class and its name.
    */
@@ -218,9 +207,9 @@ public abstract class DaikonVariableInfo
   }
 
   /**
-   * Returns a string representation of this node and its descandants.
+   * Returns a string representation of this node and its descendants.
    *
-   * @return a string representation of this node and its descandants
+   * @return a string representation of this node and its descendants
    */
   public String treeString() {
     return getStringBuilder("--").toString();
@@ -409,7 +398,7 @@ public abstract class DaikonVariableInfo
   }
 
   //
-  // Building the tre
+  // Building the tree
   //
 
   /**
@@ -471,7 +460,7 @@ public abstract class DaikonVariableInfo
 
     DaikonVariableInfo thisInfo; // DaikonVariableInfo corresponding to the "this" object
     if (!dontPrintInstanceVars && topLevelCall) {
-      // "this" variable; must must be at the first level of recursion (not lower) to print it
+      // "this" variable; must be at the first level of recursion (not lower) to print it
       thisInfo = new ThisObjInfo(type);
       addChild(thisInfo);
 
@@ -622,7 +611,7 @@ public abstract class DaikonVariableInfo
         for (MethodInfo meth : typeInfo.method_infos) {
           if (meth.isPure() && meth.arg_names.length == 1) {
             for (DaikonVariableInfo sib : siblings) {
-              String sibType = sib.getTypeNameOnly();
+              String sibType = sib.getTypeName();
               Class<?> sibClass;
 
               // Get class type of the class variable
@@ -719,16 +708,10 @@ public abstract class DaikonVariableInfo
     Class<?> type = meth.getReturnType();
     assert type != null;
 
-    String theName = meth.getName() + "(";
-    if (args.length > 0) {
-      theName += args[0].getName();
+    StringJoiner theName = new StringJoiner(", ", meth.getName() + "(", ")");
+    for (DaikonVariableInfo arg : args) {
+      theName.add(arg.getName());
     }
-    if (args.length > 1) {
-      for (int i = 1; i < args.length - 1; i++) {
-        theName += ", " + args[i].getName();
-      }
-    }
-    theName += ")";
 
     if (offset.length() > 0) {
       // offset already starts with "this"
@@ -750,7 +733,7 @@ public abstract class DaikonVariableInfo
 
     addChild(newPure);
 
-    newPure.checkForDerivedVariables(type, theName, offset);
+    newPure.checkForDerivedVariables(type, theName.toString(), offset);
 
     buf.append(offset);
 
@@ -791,7 +774,7 @@ public abstract class DaikonVariableInfo
     }
 
     Class<?> type = field.getType();
-    String type_name = stdClassName(type) + arr_str + appendAuxInfo(field);
+    String type_name = stdClassName(type) + arr_str;
 
     String theName = field.getName();
 
@@ -800,11 +783,6 @@ public abstract class DaikonVariableInfo
     if (theName.startsWith("this$")) {
       offset = "";
       theName = type.getName() + ".this";
-      if (!type_name.contains("#")) {
-        type_name += " # isNonNull=true";
-      } else {
-        type_name += ", isNonNull=true";
-      }
     }
 
     DaikonVariableInfo newField =
@@ -843,7 +821,6 @@ public abstract class DaikonVariableInfo
       // in this case, we don't want to print this variable to
       // the dtrace file
       if (value != null) {
-        newField.repTypeName += " = " + value;
         newField.const_val = value;
         newField.dtraceShouldPrint = false;
         if (dkconfig_constant_infer && isPrimitive) {
@@ -880,7 +857,7 @@ public abstract class DaikonVariableInfo
    * classes).
    */
   public static @BinaryName String stdClassName(Class<?> type) {
-    return Runtime.classGetNameToBinaryName(type.getName());
+    return Signatures.classGetNameToBinaryName(type.getName());
   }
 
   /**
@@ -1007,24 +984,6 @@ public abstract class DaikonVariableInfo
     return Modifier.isPublic(modifiers);
   }
 
-  // Appends as auxiliary information:
-  // the package name of the declaring class
-  private String appendAuxInfo(Field field) {
-    // int modifiers = field.getModifiers();
-
-    Package p = field.getDeclaringClass().getPackage();
-    String pkgName = (p == null ? null : p.getName());
-
-    // System.out.printf("Package name for type  %s is %s%n", type, pkgName);
-
-    // In Java 9+ package name is empty string for the unnamed package.
-    if (pkgName != null && !pkgName.isEmpty()) {
-      return " # declaringClassPackageName=" + pkgName;
-    } else {
-      return "";
-    }
-  }
-
   /**
    * Checks for "derived" Chicory variables: .class, .tostring, and java.util.List implementors and
    * adds appropriate children to this node.
@@ -1042,6 +1001,12 @@ public abstract class DaikonVariableInfo
   /** Determines if type implements list and prints associated decls, if necessary. */
   protected void checkForListDecl(Class<?> type, String theName, String offset) {
     if (isArray || type.isPrimitive() || type.isArray()) {
+      return;
+    }
+
+    // Obtaining the elements of a list requires calling its toArray() method
+    // (or calling size() and get(int), which likewise may be overridden).
+    if (no_method_calls) {
       return;
     }
 
@@ -1252,38 +1217,19 @@ public abstract class DaikonVariableInfo
     return class_name.startsWith("java.") || class_name.startsWith("javax.");
   }
 
-  /**
-   * Returns the declared type name of this variable. May include auxiliary information (represented
-   * as a suffix starting with "#").
-   *
-   * @see #getTypeNameOnly()
-   */
-  public String getTypeName() {
+  /** Returns the declared type name of this variable. */
+  @SuppressWarnings("signature") // typeName is a binary name, possibly followed by "[]"
+  public @BinaryName String getTypeName() {
     assert typeName != null : "Type name cannot be null";
 
     return typeName;
   }
 
-  /**
-   * Returns the type name without aux information.
-   *
-   * @see #getTypeName()
-   */
-  @SuppressWarnings("signature") // substring
-  public @BinaryName String getTypeNameOnly() {
-    return typeName.replaceFirst(" # .*", "");
-  }
-
   /** Returns the representation type name of this variable. */
   public String getRepTypeName() {
-    assert typeName != null : "Representation type name cannot be null";
+    assert repTypeName != null : "Representation type name cannot be null";
 
     return repTypeName;
-  }
-
-  /** Returns the rep type name without the constant value. */
-  public String getRepTypeNameOnly() {
-    return repTypeName.replaceFirst(" = .*", "");
   }
 
   /**
@@ -1356,8 +1302,7 @@ public abstract class DaikonVariableInfo
 
   /** Returns true if the declared type of this variable is int. */
   public boolean isInt() {
-    String[] sarr = getTypeName().split("  *");
-    return sarr[0].equals("int");
+    return getTypeName().equals("int");
   }
 
   /** Returns the kind of the variable (array, field, function, etc) */

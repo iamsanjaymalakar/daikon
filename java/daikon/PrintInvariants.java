@@ -24,7 +24,6 @@ import daikon.inv.filter.UnjustifiedFilter;
 import daikon.split.PptSplitter;
 import daikon.suppress.NIS;
 import daikon.suppress.NISuppressionSet;
-import gnu.getopt.Getopt;
 import gnu.getopt.LongOpt;
 import java.io.BufferedWriter;
 import java.io.File;
@@ -48,13 +47,13 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.StringJoiner;
 import java.util.StringTokenizer;
 import java.util.TreeSet;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
 import org.checkerframework.checker.mustcall.qual.Owning;
 import org.checkerframework.checker.nullness.qual.KeyFor;
-import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 import org.checkerframework.checker.nullness.qual.Nullable;
 import org.checkerframework.checker.nullness.qual.RequiresNonNull;
 import org.plumelib.util.RegexUtil;
@@ -71,7 +70,7 @@ import org.plumelib.util.StringsPlume;
 public final class PrintInvariants {
 
   private PrintInvariants() {
-    throw new Error("do not instantiate");
+    throw new UnsupportedOperationException("do not instantiate");
   }
 
   /**
@@ -155,7 +154,7 @@ public final class PrintInvariants {
    * If true, remove as many variables as possible that need to be indicated as 'post'. Post
    * variables occur when the subscript for a derived variable with an orig sequence is not orig.
    * For example: orig(a[post(i)]) An equivalent expression involving only orig variables is
-   * substitued for the post variable when one exists.
+   * substituted for the post variable when one exists.
    */
   public static boolean dkconfig_remove_post_vars = false;
 
@@ -168,7 +167,7 @@ public final class PrintInvariants {
   /**
    * This enables a different way of treating static constant variables. They are not created into
    * invariants into slices. Instead, they are examined during print time. If a unary invariant
-   * contains a value which matches the value of a static constant varible, the value will be
+   * contains a value which matches the value of a static constant variable, the value will be
    * replaced by the name of the variable, "if it makes sense". For example, if there is a static
    * constant variable a = 1. And if there exists an invariant x &le; 1, x &le; a would be the
    * result printed.
@@ -260,22 +259,22 @@ public final class PrintInvariants {
   // even in that case, which means to output a discard-reason for every
   // invariant.
   /** Output discard reasons for this class. If null, output discard reasons for all classes. */
-  private static @MonotonicNonNull String discClass = null;
+  private static @Nullable String discClass = null;
 
   /**
    * Comma-separated variable names. Output discard reasons if those are the variables. If null,
    * output discard reasons for all variable tuples.
    */
-  private static @MonotonicNonNull String discVars = null;
+  private static @Nullable String discVars = null;
 
   /**
-   * Output discard reasons for this program point. If null, output discard reasons fro all program
+   * Output discard reasons for this program point. If null, output discard reasons for all program
    * points.
    */
-  private static @MonotonicNonNull String discPpt = null;
+  private static @Nullable String discPpt = null;
 
-  /** The usage message for this program. */
-  private static String usage =
+  /** The usage message for this program, before any {@code --disc_reason} option changes it. */
+  private static final String defaultUsage =
       StringsPlume.joinLines(
           "Usage: java daikon.PrintInvariants [OPTION]... FILE",
           "  -h, --" + Daikon.help_SWITCH,
@@ -299,6 +298,9 @@ public final class PrintInvariants {
           "  --" + Daikon.wrap_xml_SWITCH,
           "      Print extra info about invariants, and wrap in XML tags");
 
+  /** The usage message for this program. */
+  private static String usage = defaultUsage;
+
   /** See the documentation for this class. */
   public static void main(final String[] args)
       throws FileNotFoundException,
@@ -317,7 +319,7 @@ public final class PrintInvariants {
 
   /**
    * This does the work of {@link #main(String[])}, but it never calls System.exit, so it is
-   * appropriate to be called progrmmatically.
+   * appropriate to be called programmatically.
    */
   public static void mainHelper(String[] args)
       throws FileNotFoundException,
@@ -326,9 +328,11 @@ public final class PrintInvariants {
           IOException,
           ClassNotFoundException {
 
+    // Cleanup from any previous runs of PrintInvariants or Daikon
+    cleanup();
+
     LongOpt[] longopts =
         new LongOpt[] {
-          new LongOpt(Daikon.help_SWITCH, LongOpt.NO_ARGUMENT, null, 0),
           new LongOpt(Daikon.format_SWITCH, LongOpt.REQUIRED_ARGUMENT, null, 0),
           new LongOpt(Daikon.suppress_redundant_SWITCH, LongOpt.NO_ARGUMENT, null, 0),
           new LongOpt(Daikon.output_num_samples_SWITCH, LongOpt.NO_ARGUMENT, null, 0),
@@ -339,21 +343,19 @@ public final class PrintInvariants {
           new LongOpt(Daikon.ppt_regexp_SWITCH, LongOpt.REQUIRED_ARGUMENT, null, 0),
           new LongOpt(Daikon.track_SWITCH, LongOpt.REQUIRED_ARGUMENT, null, 0),
           new LongOpt(Daikon.wrap_xml_SWITCH, LongOpt.NO_ARGUMENT, null, 0),
+          new LongOpt(Daikon.disc_reason_SWITCH, LongOpt.REQUIRED_ARGUMENT, null, 0),
           new LongOpt(PrintInvariants.output_SWITCH, LongOpt.REQUIRED_ARGUMENT, null, 0),
           new LongOpt(
               PrintInvariants.print_csharp_metadata_SWITCH, LongOpt.OPTIONAL_ARGUMENT, null, 0),
         };
-    Getopt g = new Getopt("daikon.PrintInvariants", args, "h", longopts);
+    DaikonGetopt g = new DaikonGetopt(args, "", longopts, usage);
     int c;
     while ((c = g.getopt()) != -1) {
       switch (c) {
         case 0:
           // got a long option
           String option_name = longopts[g.getLongind()].getName();
-          if (Daikon.help_SWITCH.equals(option_name)) {
-            System.out.println(usage);
-            throw new Daikon.NormalTermination();
-          } else if (Daikon.ppt_regexp_SWITCH.equals(option_name)) {
+          if (Daikon.ppt_regexp_SWITCH.equals(option_name)) {
             if (ppt_regexp != null) {
               throw new Error(
                   "multiple --"
@@ -429,17 +431,11 @@ public final class PrintInvariants {
           } else if (Daikon.wrap_xml_SWITCH.equals(option_name)) {
             wrap_xml = true;
           } else {
-            throw new RuntimeException("Unknown long option received: " + option_name);
+            throw new Daikon.BugInDaikon("Unhandled long option " + option_name);
           }
           break;
-        case 'h':
-          System.out.println(usage);
-          throw new Daikon.NormalTermination();
-        case '?':
-          break; // getopt() already printed an error
         default:
-          System.out.println("getopt() returned " + c);
-          break;
+          throw new Daikon.BugInDaikon("getopt() returned " + c);
       }
     }
 
@@ -498,7 +494,27 @@ public final class PrintInvariants {
       assert out_stream != null
           : "@AssumeAssertion(nullness): flush() does not affect any global variables";
       out_stream.close();
+      out_stream = null;
     }
+  }
+
+  /**
+   * Resets the static fields that {@link #mainHelper} sets from command-line options, and those of
+   * {@link Daikon}, so that a later call to {@link #mainHelper} uses the defaults.
+   */
+  public static void cleanup() {
+    Daikon.cleanup();
+
+    // Reset statics.  These must match the settings where they are declared.
+    ppt_regexp = null;
+    print_discarded_invariants = false;
+    discClass = null;
+    discVars = null;
+    discPpt = null;
+    usage = defaultUsage;
+    wrap_xml = false;
+    print_csharp_metadata = false;
+    out_stream = null;
   }
 
   /**
@@ -705,10 +721,12 @@ public final class PrintInvariants {
         throw new IllegalArgumentException("Too many brackets" + lineSep + usage);
       StringTokenizer vars = new StringTokenizer(parenTokens.nextToken(), ",");
       if (vars.hasMoreTokens()) {
-        discVars = vars.nextToken();
-        while (vars.hasMoreTokens()) discVars += "," + vars.nextToken();
+        StringJoiner discVarsJoiner = new StringJoiner(",");
+        while (vars.hasMoreTokens()) {
+          discVarsJoiner.add(vars.nextToken());
+        }
         // Get rid of *all* spaces since we know varnames can't have them
-        discVars = discVars.replaceAll(" ", "");
+        discVars = discVarsJoiner.toString().replaceAll(" ", "");
       }
       if (temp.endsWith(">")) {
         return;
@@ -1107,7 +1125,7 @@ public final class PrintInvariants {
       }
     }
 
-    // Addditional information about C# (C Sharp) contracts.
+    // Additional information about C# (C Sharp) contracts.
     if (Daikon.output_format == OutputFormat.CSHARPCONTRACT) {
 
       String csharp = inv.format_using(OutputFormat.CSHARPCONTRACT);
@@ -1119,19 +1137,9 @@ public final class PrintInvariants {
 
       if (!postAndOrig) {
         Set<String> sortedVariables = new HashSet<>();
-        String sortedVars = "";
-        Set<String> variables = new HashSet<>();
-        String vars = "";
-
         get_csharp_invariant_variables(inv, sortedVariables, true);
+        Set<String> variables = new HashSet<>();
         get_csharp_invariant_variables(inv, variables, false);
-
-        for (String s : sortedVariables) {
-          sortedVars += s + " ";
-        }
-        for (String s : variables) {
-          vars += s + " ";
-        }
 
         out.println(csharp);
 
@@ -1139,8 +1147,8 @@ public final class PrintInvariants {
         if (PrintInvariants.print_csharp_metadata) {
           out.println(daikon);
           out.println(invType);
-          out.println(sortedVars);
-          out.println(vars);
+          out.println(String.join(" ", sortedVariables));
+          out.println(String.join(" ", variables));
           out.println("*");
         }
       }
@@ -1556,12 +1564,13 @@ public final class PrintInvariants {
         }
         VarInfo[] vis = slice.var_infos;
 
-        String var_str = "";
-        for (int i = 0; i < vis.length; i++) {
-          var_str += vis[i].name() + " ";
-          if (ppt.is_constant(vis[i])) {
-            var_str += "[" + Debug.toString(ppt.constants.constant_value(vis[i])) + "] ";
+        StringJoiner var_str = new StringJoiner(" ");
+        for (VarInfo vi : vis) {
+          String name = vi.name();
+          if (ppt.is_constant(vi)) {
+            name += " [" + Debug.toString(ppt.constants.constant_value(vi)) + "]";
           }
+          var_str.add(name);
         }
         System.out.printf("  Slice %s - %d invariants%n", var_str, slice.invs.size());
 

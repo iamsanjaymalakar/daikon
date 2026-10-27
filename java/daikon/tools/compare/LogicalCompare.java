@@ -5,6 +5,7 @@ import static java.util.logging.Level.FINE;
 import static java.util.logging.Level.INFO;
 
 import daikon.Daikon;
+import daikon.DaikonGetopt;
 import daikon.FileIO;
 import daikon.Global;
 import daikon.PptMap;
@@ -68,7 +69,7 @@ import org.plumelib.util.StringsPlume;
  */
 public class LogicalCompare {
   private LogicalCompare() {
-    throw new Error("do not instantiate");
+    throw new UnsupportedOperationException("do not instantiate");
   }
 
   public static final Logger debug = Logger.getLogger("daikon.tools.compare.LogicalCompare");
@@ -463,7 +464,7 @@ public class LogicalCompare {
     lemmas = new LemmaStack();
   }
 
-  // Comparare the invariants for enter and exit points between two
+  // Compare the invariants for enter and exit points between two
   // methods (usually two sets of invariants for methods of the same
   // name).
   // For historical reasons, one set of invariants is called the app
@@ -644,7 +645,7 @@ public class LogicalCompare {
 
   /**
    * This does the work of {@link #main(String[])}, but it never calls System.exit, so it is
-   * appropriate to be called progrmmatically.
+   * appropriate to be called programmatically.
    *
    * @param args command-line arguments, like those of {@link #main}
    */
@@ -658,7 +659,6 @@ public class LogicalCompare {
           new LongOpt(Daikon.debugAll_SWITCH, LongOpt.NO_ARGUMENT, null, 0),
           new LongOpt(Daikon.debug_SWITCH, LongOpt.REQUIRED_ARGUMENT, null, 0),
           new LongOpt("filters", LongOpt.REQUIRED_ARGUMENT, null, 0),
-          new LongOpt("help", LongOpt.NO_ARGUMENT, null, 0),
           new LongOpt("minimize-classes", LongOpt.NO_ARGUMENT, null, 0),
           new LongOpt("no-post-after-pre-failure", LongOpt.NO_ARGUMENT, null, 0),
           new LongOpt("post-after-pre-failure", LongOpt.NO_ARGUMENT, null, 0),
@@ -675,7 +675,7 @@ public class LogicalCompare {
 
     extra_assumptions = new LinkedHashMap<>();
 
-    Getopt g = new Getopt("daikon.tools.compare.LogicalCompare", args, "h", longopts);
+    DaikonGetopt g = new DaikonGetopt(args, "", longopts, usage);
     int c;
     boolean user_filters = false;
     while ((c = g.getopt()) != -1) {
@@ -683,10 +683,7 @@ public class LogicalCompare {
         case 0:
           // got a long option
           String option_name = longopts[g.getLongind()].getName();
-          if (Daikon.help_SWITCH.equals(option_name)) {
-            System.out.println(usage);
-            throw new Daikon.NormalTermination();
-          } else if (option_name.equals("config-file")) {
+          if (option_name.equals("config-file")) {
             String config_file = Daikon.getOptarg(g);
             try (InputStream stream = new FileInputStream(config_file)) {
               Configuration.getInstance().apply(stream);
@@ -727,15 +724,11 @@ public class LogicalCompare {
           } else if (option_name.equals("minimize-classes")) {
             opt_minimize_classes = true;
           } else {
-            throw new Error();
+            throw new Daikon.BugInDaikon("Unhandled long option " + option_name);
           }
           break;
-        case 'h':
-          System.out.println(usage);
-          throw new Daikon.NormalTermination();
-        case '?':
-          // getopt() already printed an error
-          throw new Daikon.UserError("Bad argument");
+        default:
+          throw new Daikon.BugInDaikon("getopt() returned " + c);
       }
     }
 

@@ -5,6 +5,7 @@ import static java.util.logging.Level.INFO;
 import static org.junit.Assert.fail;
 
 import daikon.Daikon;
+import daikon.FileIO;
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -78,7 +79,7 @@ public class InvariantFormatTester {
   }
 
   /**
-   * This function produces the format list for intialization of the static format list variable.
+   * This function produces the format list for initialization of the static format list variable.
    */
   static List<String> getTestFormatList() {
     List<String> result = new ArrayList<>();
@@ -102,12 +103,26 @@ public class InvariantFormatTester {
     // Don't care about comparability info because we are only
     // creating variables for the purpose of being compared (thus they
     // should all be comparable)
+    boolean oldIgnoreComparability = Daikon.ignore_comparability;
     Daikon.ignore_comparability = true;
 
-    // run the actual test
+    // FormatTestCase creates variables in the decl format that FileIO.new_decl_format specifies.
+    // The csharpcontract format requires the new decl format.
+    Boolean oldNewDeclFormat = FileIO.new_decl_format;
+    FileIO.new_decl_format = true;
 
-    if (!execute()) {
-      fail("At least one test failed. Inspect " + diff_file + " for error report.");
+    try {
+      // run the actual test
+      if (!execute()) {
+        fail("At least one test failed. Inspect " + diff_file + " for error report.");
+      }
+    } finally {
+      Daikon.ignore_comparability = oldIgnoreComparability;
+      if (oldNewDeclFormat == null) {
+        FileIO.resetNewDeclFormat();
+      } else {
+        FileIO.new_decl_format = oldNewDeclFormat;
+      }
     }
   }
 
@@ -292,7 +307,7 @@ public class InvariantFormatTester {
    * Determines whether a line is a comment or not.
    *
    * @param line the line in question
-   * @return true if the line is a comment (that is, not to be interpretted as a command); false
+   * @return true if the line is a comment (that is, not to be interpreted as a command); false
    *     otherwise
    */
   @Pure

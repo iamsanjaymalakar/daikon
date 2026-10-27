@@ -1,10 +1,13 @@
 package daikon.tools;
 
+import daikon.Daikon;
+import daikon.DaikonGetopt;
 import daikon.FileIO;
 import daikon.PptMap;
 import daikon.PptTopLevel;
 import daikon.ValueTuple;
 import daikon.VarInfo;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -32,22 +35,45 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
  */
 public class ReadTrace {
 
+  /** The usage message for this program. */
+  private static final String usage = "Usage: java daikon.tools.ReadTrace file1 file2 ...";
+
   /** Do not instantiate. */
   private ReadTrace() {
-    throw new Error("Do not instantiate");
+    throw new UnsupportedOperationException("Do not instantiate");
   }
 
   /**
    * The entry point for ReadTrace.
    *
-   * @param args data trace file names
+   * @param args data trace file names, read from the command line
    */
   public static void main(String[] args) {
+    try {
+      mainHelper(args);
+    } catch (Daikon.DaikonTerminationException e) {
+      Daikon.handleDaikonTerminationException(e);
+    }
+  }
+
+  /**
+   * This does the work of {@link #main(String[])}, but it never calls System.exit, so it is
+   * appropriate to be called programmatically.
+   *
+   * @param args command-line arguments, like those of {@link #main}
+   */
+  public static void mainHelper(String[] args) {
+    String[] traceFiles = DaikonGetopt.nonOptionArgs(args, usage);
+    if (traceFiles.length == 0) {
+      throw new Daikon.UserError("No trace files specified" + Daikon.lineSep + usage);
+    }
     CollectDataProcessor processor = new CollectDataProcessor();
     PptMap ppts = new PptMap();
     try {
-      FileIO.read_data_trace_files(Arrays.asList(args), ppts, processor, false);
-    } catch (Exception e) {
+      // `read_data_trace_files()` requires the list of files to be modifiable.
+      FileIO.read_data_trace_files(
+          new ArrayList<>(Arrays.asList(traceFiles)), ppts, processor, false);
+    } catch (IOException e) {
       throw new Error(e);
     }
 

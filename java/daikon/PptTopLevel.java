@@ -85,10 +85,12 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Set;
@@ -113,7 +115,6 @@ import org.checkerframework.checker.nullness.qual.Nullable;
 import org.checkerframework.checker.nullness.qual.RequiresNonNull;
 import org.checkerframework.dataflow.qual.Pure;
 import org.checkerframework.dataflow.qual.SideEffectFree;
-import org.plumelib.reflection.ReflectionPlume;
 import org.plumelib.util.CollectionsPlume;
 import org.plumelib.util.StringsPlume;
 import typequals.prototype.qual.Prototype;
@@ -413,19 +414,20 @@ public class PptTopLevel extends Ppt {
   @SuppressWarnings("fields.uninitialized") // todo: initialization and helper methods
   public PptTopLevel(
       String name,
-      PptType type,
+      @Nullable PptType type,
       List<ParentRelation> parents,
       EnumSet<PptFlags> flags,
       VarInfo[] var_infos) {
     super(var_infos);
 
     this.name = name;
-    if (!name.contains(":::")) {
-      name += ":::" + type;
-    }
-    this.ppt_name = new PptName(name);
+    this.ppt_name = ppt_name_for(name, type);
     this.flags = flags;
-    this.type = type;
+    PptType normalized_type = normalize_type(ppt_name, type);
+    if (normalized_type == null) {
+      throw new IllegalArgumentException(type_error(name, type));
+    }
+    this.type = normalized_type;
     this.parent_relations = parents;
     init_vars();
   }
@@ -433,22 +435,144 @@ public class PptTopLevel extends Ppt {
   /** Restore/Create interns when reading serialized object. */
   private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException {
     in.defaultReadObject();
-    if (name != null) {
-      try {
-        ReflectionPlume.setFinalField(this, "name", name.intern());
-      } catch (Exception e) {
-        throw new Error("Error setting name", e);
-      }
+    // A conditional program point has its parent's type, which its name (the parent's name with
+    // ";condition=..." appended) does not indicate.
+    if (this instanceof PptConditional) {
+      return;
+    }
+    // A .inv file written by an earlier version of Daikon may have no type for a program point,
+    // or the type EXIT for a numbered exit.  The predicates such as is_subexit use only the type.
+    PptType normalized_type = normalize_type(ppt_name, type);
+    // Earlier versions accepted a declared type that does not conform to the name; keep it, so
+    // that such a file can still be read.
+    if (normalized_type != null) {
+      type = normalized_type;
+    }
+  }
+
+  /**
+   * Returns the PptName for a program point with the given name and declared type. A name that
+   * lacks ":::" gets ":::" and the type appended.
+   *
+   * @param name the name of the program point
+   * @param type the declared type of the program point, or null if none was declared
+   * @return the PptName for the program point
+   */
+  private static PptName ppt_name_for(String name, @Nullable PptType type) {
+    if (!name.contains(":::")) {
+      name += ":::" + (type == null ? PptType.POINT : type);
+    }
+    return new PptName(name);
+  }
+
+  /**
+   * Returns an error message if the declared type of a program point does not conform to its name.
+   * See {@link #normalize_type} for the conformance rules.
+   *
+   * @param name the name of the program point
+   * @param type the declared type of the program point, or null if none was declared
+   * @return an error message, or null if the type conforms to the name
+   */
+  public static @Nullable String type_error(String name, @Nullable PptType type) {
+    PptName ppt_name = ppt_name_for(name, type);
+    if (type == null || normalize_type(ppt_name, type) != null) {
+      return null;
+    }
+    return String.format(
+        "Program point %s has type %s, but its name does not conform to that type",
+        ppt_name.getName(), type.toString().toLowerCase(Locale.ROOT));
+  }
+
+  /**
+   * Returns the type that a program point with the given name has if no type is declared. See
+   * {@link #normalize_type}.
+   *
+   * @param ppt_name the name of the program point
+   * @return the type indicated by the name
+   */
+  private static PptType type_from_name(PptName ppt_name) {
+    if (ppt_name.isEnterPoint()) {
+      return PptType.ENTER;
+    } else if (ppt_name.isCombinedExitPoint()) {
+      return PptType.EXIT;
+    } else if (ppt_name.isNumberedExitPoint()) {
+      return PptType.SUBEXIT;
+    } else if (ppt_name.isObjectInstanceSynthetic()) {
+      return PptType.OBJECT;
+    } else if (ppt_name.isClassStaticSynthetic()) {
+      return PptType.CLASS;
+    } else {
+      return PptType.POINT;
+    }
+  }
+
+  /**
+   * Returns the type that a program point with the given name and declared type should have.
+   *
+   * <p>A program point that has no declared type (as in a version 1 decls file, or a version 2
+   * decls file that omits the ppt-type record) gets its type from its name:
+   *
+   * <ul>
+   *   <li>foo:::ENTER is an {@link PptType#ENTER},
+   *   <li>a combined exit point, foo:::EXIT, is an {@link PptType#EXIT},
+   *   <li>a numbered exit point such as foo:::EXIT22 is a {@link PptType#SUBEXIT},
+   *   <li>Foo:::OBJECT is an {@link PptType#OBJECT},
+   *   <li>Foo:::CLASS is a {@link PptType#CLASS}, and
+   *   <li>any other program point is a generic {@link PptType#POINT}.
+   * </ul>
+   *
+   * <p>A program point that is declared with type {@link PptType#EXIT} or {@link PptType#SUBEXIT}
+   * is a combined exit or a numbered exit, according to its name. (Some front ends declare a
+   * numbered exit with type {@link PptType#EXIT}.)
+   *
+   * <p>A program point that is declared with any other type keeps that type. Its name must conform
+   * to the type, except for {@link PptType#POINT}, which permits any name.
+   *
+   * <p>As a result, the predicates is_enter, is_subexit, is_combined_exit, etc. agree with one
+   * another and with the program point's name.
+   *
+   * @param ppt_name the name of the program point
+   * @param type the declared type of the program point, or null if none was declared
+   * @return the type that the program point should have, or null if the declared type does not
+   *     conform to the name
+   */
+  private static @Nullable PptType normalize_type(PptName ppt_name, @Nullable PptType type) {
+    PptType name_type = type_from_name(ppt_name);
+    if (type == null) {
+      return name_type;
+    }
+    switch (type) {
+      case POINT:
+        return type;
+      case EXIT:
+      case SUBEXIT:
+        return (name_type == PptType.EXIT || name_type == PptType.SUBEXIT) ? name_type : null;
+      default:
+        return (type == name_type) ? type : null;
     }
   }
 
   // Used by DaikonSimple, InvMap, and tests.  Violates invariants.
+  public PptTopLevel(String name, VarInfo[] var_infos) {
+    this(name, type_from_name(new PptName(name)), var_infos);
+  }
+
+  /**
+   * Creates a program point with the given type, which is not checked against the name. Used by
+   * PptConditional, whose name (its parent's name with ";condition=..." appended) does not indicate
+   * its type. Violates invariants.
+   *
+   * @param name the name of the program point
+   * @param type the type of the program point
+   * @param var_infos the variables of the program point
+   */
   @SuppressWarnings(
       "nullness:fields.uninitialized") // violates invariants; also uses helper function
-  public PptTopLevel(String name, VarInfo[] var_infos) {
+  protected PptTopLevel(String name, PptType type, VarInfo[] var_infos) {
     super(var_infos);
     this.name = name;
     ppt_name = new PptName(name);
+    this.type = type;
     init_vars();
   }
 
@@ -993,11 +1117,11 @@ public class PptTopLevel extends Ppt {
     if (Global.debugDerive.isLoggable(Level.FINE)) {
       Global.debugDerive.fine(
           "Number of derived variables at program point " + this.name + ": " + result.size());
-      String derived_vars = "Derived:";
-      for (Iterator<Derivation> itor = result.iterator(); itor.hasNext(); ) {
-        derived_vars += " " + itor.next().getVarInfo().name();
+      StringJoiner derived_vars = new StringJoiner(" ", "Derived: ", "");
+      for (Derivation deriv : result) {
+        derived_vars.add(deriv.getVarInfo().name());
       }
-      Global.debugDerive.fine(derived_vars);
+      Global.debugDerive.fine(derived_vars.toString());
     }
     Derivation[] result_array = result.toArray(new Derivation[0]);
     return result_array;
@@ -1734,10 +1858,10 @@ public class PptTopLevel extends Ppt {
   }
 
   /**
-   * Searches for all of the invariants that that provide an exact value for v. Intuitively those
-   * are invariants of the form 'v = equation'. For example: 'v = 63' or 'v = x * y' The
-   * implementation is a little iffy -- each invariant over v is examined and it matches iff it is
-   * exact and its daikon format starts with 'v ='.
+   * Searches for all of the invariants that provide an exact value for v. Intuitively those are
+   * invariants of the form 'v = equation'. For example: 'v = 63' or 'v = x * y' The implementation
+   * is a little iffy -- each invariant over v is examined and it matches iff it is exact and its
+   * daikon format starts with 'v ='.
    *
    * @return list of matching invariants or null if no matching invariants are found
    */
@@ -2132,7 +2256,7 @@ public class PptTopLevel extends Ppt {
 
   /**
    * Returns true if v1 is known to be a subsequence of v2. This is true if the subsequence
-   * invariant exists or if it it suppressed.
+   * invariant exists or if it is suppressed.
    */
   @Pure
   public boolean is_subsequence(VarInfo v1, VarInfo v2) {
@@ -2750,6 +2874,19 @@ public class PptTopLevel extends Ppt {
     }
   }
 
+  /**
+   * Creates a pair of conditional program points for each splitter that is valid at this program
+   * point.
+   *
+   * <p>If several valid splitters have the same condition text (ignoring leading and trailing
+   * whitespace), this uses only the first of them. That can lose information, because splitters
+   * with the same text may have been compiled for different program points, where a given variable
+   * name may refer to a different variable or have a different type. For example, in {@code i > 0},
+   * a splitter compiled for one program point may test parameter {@code i} and a splitter compiled
+   * for another program point may test field {@code this.i}.
+   *
+   * @param splits splitter factories
+   */
   public void addConditions(Splitter[] splits) {
 
     debugConditional.fine(
@@ -2765,16 +2902,28 @@ public class PptTopLevel extends Ppt {
 
     // Create a Conditional ppt for each side of each splitter
     splitters = new ArrayList<PptSplitter>(splits.length);
+    // The conditions of the splitters in `splitters`. A conditional program point's name contains
+    // its splitter's condition text, so splitters with the same condition text (ignoring leading
+    // and trailing whitespace) would yield indistinguishable conditional program points.
+    // Every program point uses the first valid splitter for a condition, rather than choosing in a
+    // way that depends on the program point, so that a program point and its children usually use
+    // the same Splitter object, as PptRelation.init_hierarchy requires.
+    Set<String> conditions = new HashSet<>();
     for (int ii = 0; ii < splits.length; ii++) {
-      PptSplitter ppt_split = new PptSplitter(this, splits[ii]);
-      if (!ppt_split.splitter_valid()) {
-        debugConditional.fine(
-            "Splitter ("
-                + ((ppt_split.splitter == null) ? "[no class]" : ppt_split.splitter.getClass())
-                + ") not valid: "
-                + ppt_split.ppts[0].name);
+      String condition = splits[ii].condition().trim();
+      if (conditions.contains(condition)) {
+        debugConditional.fine("Splitter has a duplicate condition: " + condition);
         continue;
       }
+      // Checking validity here is cheaper than constructing a PptSplitter, which copies this
+      // program point's variables. A conditional program point has the same variables as this one.
+      if (!splits[ii].instantiateSplitter(this).valid()) {
+        debugConditional.fine(
+            "Splitter (" + splits[ii].getClass() + ") not valid at " + name() + ": " + condition);
+        continue;
+      }
+      PptSplitter ppt_split = new PptSplitter(this, splits[ii]);
+      conditions.add(condition);
       splitters.add(ppt_split);
       if (debugConditional.isLoggable(Level.FINE)) {
         debugConditional.fine("Added PptSplitter: " + ppt_split);
@@ -2898,7 +3047,7 @@ public class PptTopLevel extends Ppt {
     for (PptSlice oPivoted : pivoted) {
       addSlice(oPivoted); // Make the key right again
       if (debugEqualTo.isLoggable(Level.FINE)) {
-        debugEqualTo.fine("  Readded: " + oPivoted);
+        debugEqualTo.fine("  Re-added: " + oPivoted);
       }
     }
 
@@ -4494,7 +4643,10 @@ public class PptTopLevel extends Ppt {
       if (cnt_inv_classes) {
         assert inv_map != null : "@AssumeAssertion(nullness) : dependent: cnt_inv_classes is true";
         for (Class<? extends Invariant> inv_class : inv_map.keySet()) {
-          @SuppressWarnings("nullness") // limited side effects don't affect inv_map field
+          @SuppressWarnings({
+            "nullness:dereference.of.nullable", // limited side effects don't affect inv_map field
+            "nullness:unneeded.suppression" // TEMPORARY
+          })
           Cnt cnt = inv_map.get(inv_class);
           log.fine(" : " + inv_class + ": " + cnt.cnt);
         }
@@ -4516,13 +4668,12 @@ public class PptTopLevel extends Ppt {
       if (show_tern_slices) {
         for (Iterator<PptSlice> j = ppt.views_iterator(); j.hasNext(); ) {
           PptSlice slice = j.next();
-          StringBuilder sb = new StringBuilder();
+          StringJoiner sj = new StringJoiner(" ");
           for (int k = 0; k < slice.arity(); k++) {
             VarInfo v = slice.var_infos[k];
-            sb.append(
-                v.name() + "/" + v.equalitySet.getVars().size() + "/" + v.file_rep_type + " ");
+            sj.add(v.name() + "/" + v.equalitySet.getVars().size() + "/" + v.file_rep_type);
           }
-          log.fine(": " + sb.toString() + ": " + slice.invs.size());
+          log.fine(": " + sj + ": " + slice.invs.size());
         }
       }
     }
@@ -4653,11 +4804,7 @@ public class PptTopLevel extends Ppt {
   /** Is this is an exit ppt (combined or specific)? */
   @Pure
   public boolean is_exit() {
-    if (type != null) {
-      return (type == PptType.EXIT) || (type == PptType.SUBEXIT);
-    } else {
-      return ppt_name.isExitPoint();
-    }
+    return (type == PptType.EXIT) || (type == PptType.SUBEXIT);
   }
 
   /**
@@ -4667,48 +4814,31 @@ public class PptTopLevel extends Ppt {
    */
   @Pure
   public boolean is_enter() {
-    if (type != null) {
-      return (type == PptType.ENTER);
-    } else {
-      return ppt_name.isEnterPoint();
-    }
+    return type == PptType.ENTER;
   }
 
   /** Is this a combined exit point? */
   @Pure
   public boolean is_combined_exit() {
-    if (type != null) {
-      return (type == PptType.EXIT);
-    } else {
-      return ppt_name.isCombinedExitPoint();
-    }
+    return type == PptType.EXIT;
   }
 
   /** Is this a numbered (specific) exit point? */
   @Pure
   public boolean is_subexit() {
-    if (type != null) {
-      return (type == PptType.SUBEXIT);
-    } else {
-      return ppt_name.isExitPoint() && !ppt_name.isCombinedExitPoint();
-    }
+    return type == PptType.SUBEXIT;
   }
 
   /** Is this a ppt that represents an object? */
   @Pure
   public boolean is_object() {
-    if (type != null) {
-      return (type == PptType.OBJECT);
-    } else {
-      return ppt_name.isObjectInstanceSynthetic();
-    }
+    return type == PptType.OBJECT;
   }
 
   /** Is this a ppt that represents a class? */
-  @EnsuresNonNullIf(result = true, expression = "type")
   @Pure
   public boolean is_class() {
-    return (type != null && type == PptType.CLASS);
+    return type == PptType.CLASS;
   }
 
   public String var_names() {

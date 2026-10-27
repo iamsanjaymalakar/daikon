@@ -1,20 +1,36 @@
+# The directory containing this file.  It is computed before any other file is
+# included, because MAKEFILE_LIST ends with the most recently read makefile.
+DAIKONDIR := $(realpath $(dir $(lastword ${MAKEFILE_LIST})))
+
 # Put user-specific changes in your own Makefile.user file in this directory.
 # Make will silently continue if Makefile.user does not exist.
 -include Makefile.user
 
-DAIKONDIR := $(realpath $(dir $(lastword ${MAKEFILE_LIST})))
-
 HTMLTOOLS ?= ${DAIKONDIR}/.utils/html-tools
 CHECKLINK ?= ${DAIKONDIR}/.utils/checklink
 
-PLUMESCRIPTS ?= ${DAIKONDIR}/.utils/plume-scripts
-SORT_DIRECTORY_ORDER = ${PLUMESCRIPTS}/sort-directory-order
+PLUME_SCRIPTS ?= ${DAIKONDIR}/.utils/plume-scripts
+
+ifndef NONETWORK
+ifeq (,$(wildcard ${PLUME_SCRIPTS}))
+  dummy := $(shell mkdir -p "$(dir ${PLUME_SCRIPTS})" && git clone --depth=1 -q https://github.com/plume-lib/plume-scripts.git "${PLUME_SCRIPTS}")
+endif
+endif
+SORT_DIRECTORY_ORDER := ${PLUME_SCRIPTS}/sort-directory-order
 ifneq "$(wildcard ${SORT_DIRECTORY_ORDER})" "${SORT_DIRECTORY_ORDER}"
-  # Until "make ../plume-scripts" has been run, sort-directory-order is not available.
-  SORT_DIRECTORY_ORDER = sort
+  # The clone above did not happen or did not succeed, so sort-directory-order is not available.
+  SORT_DIRECTORY_ORDER := sort
 endif
 
-JAVA_RELEASE_NUMBER := $(shell java -version 2>&1 | head -1 | cut -d'"' -f2 | sed '/^1\./s///' | cut -d'.' -f1 | sed 's/-ea//')
+# The bin/ directory of the JDK.  Recipes that run JDK tools use it, as in
+# "${JDK_BIN}/javac".  java-home.mk, which sets and exports JAVA_HOME, is read
+# the first time JDK_BIN is expanded, so that targets that do not use JDK_BIN
+# neither run javac nor need a JDK.  Therefore, JAVA_HOME, JAVA_RELEASE_NUMBER,
+# and the JAVANN_OR_NEWER variables are not set in this file until JDK_BIN has
+# been expanded; recipes should use ${JDK_BIN} rather than those variables.
+# JDK_BIN does not redefine itself, because make's expansion of a variable can
+# misbehave if the variable is redefined during that expansion.
+JDK_BIN = $(if ${JAVA_HOME_MK_READ},,$(eval include ${DAIKONDIR}/java/java-home.mk)$(eval JAVA_HOME_MK_READ := 1))${JAVA_HOME_OR_ERROR}/bin
 
 
 ##########################################################################
@@ -26,7 +42,7 @@ JAVA_RELEASE_NUMBER := $(shell java -version 2>&1 | head -1 | cut -d'"' -f2 | se
 
 # note that for right now, we are only copying the html and texinfo
 # versions of the developer manual (though the PDF version is also built)
-IMAGE_FILES := daikon-logo.gif daikon-logo.png daikon-logo.eps dfepl-flow.dot
+IMAGE_FILES := daikon-logo.gif daikon-logo.png daikon-logo.eps
 IMAGE_PARTIAL_PATHS := $(addprefix images/,${IMAGE_FILES})
 DOC_FILES_NO_IMAGES := Makefile index.html daikon.texinfo \
                        config-options.texinfo invariants-doc.texinfo \
@@ -46,7 +62,7 @@ README_PATHS := README doc/README fjalar/README
 DIST_VERSION_FILES := ${README_PATHS} doc/daikon.texinfo doc/developer.texinfo \
                       doc/index.html doc/www/download/index.html
 
-# Scripts, such as Perl programs, that are included in the Daikon distribution.
+# Scripts that are included in the Daikon distribution.
 # Why not just include all of them?  (Maybe to avoid problems with
 # accidentally including things in the user's checkout that are not needed
 # by most users, but why not include everything that's in repository?)
@@ -55,7 +71,6 @@ DIST_VERSION_FILES := ${README_PATHS} doc/daikon.texinfo doc/developer.texinfo \
 # from the 'Installation' section of the Daikon manual.
 SCRIPT_FILES := Makefile \
 	daikon.bashrc \
-	dfepl dtrace-perl dtype-perl \
 	java-cpp \
 	kvasir-dtrace \
 	convertcsv.pl \
@@ -68,10 +83,6 @@ SCRIPT_PATHS := $(addprefix scripts/,${SCRIPT_FILES})
 
 # This is so troublesome that it isn't used except as a list of dependences for make commands
 DAIKON_JAVA_FILES := $(shell find java -name '*daikon-java*' -prune -o -name '*.java' -print | ${SORT_DIRECTORY_ORDER})
-# If we're building on JDK 23 or less, remove the java24 files from the list.
-ifeq ($(shell test ${JAVA_RELEASE_NUMBER} -lt 24; echo $$?),0)
-  DAIKON_JAVA_FILES := $(filter-out %24.java, ${DAIKON_JAVA_FILES})
-endif
 
 DAIKON_RESOURCE_FILES := daikon/config/example-settings.txt \
 	daikon/simplify/daikon-background.txt \
@@ -79,7 +90,6 @@ DAIKON_RESOURCE_FILES := daikon/config/example-settings.txt \
 	daikon/test/InvariantFormatTest.commands \
 	daikon/test/SampleTester.commands \
 	daikon/test/SampleTester.decls \
-	daikon/test/SampleTesterGlobal.decls \
 	daikon/test/SampleTester.commands_linear_ternary \
 	daikon/test/varInfoNameTest.testEscForall \
 	daikon/test/varInfoNameTest.testEscForall.goal \
@@ -105,11 +115,7 @@ WWW_DIR := ${WWW_PARENT}/daikon
 INV_DIR := $(shell pwd)
 
 JAR_DIR := ${INV_DIR}
-# This path needs to contain checker.jar, because the files being run
-# were compiled with checker.jar at the beginning of the path.  This
-# is a problem when checker.jar has a different version of a library
-# such as plume-util. TODO:  Find a way to remove checker.jar.
-QT_PATH := ../../../java/lib/checker-framework/checker.jar:../../../daikon.jar:.:../../../java/*
+QT_PATH := ../../../java/lib/checker-qual.jar:../../../daikon.jar:.:../../../java/*
 
 # Staging area for the distribution
 STAGING_DIR := ${WWW_PARENT}/staging-daikon
@@ -128,23 +134,13 @@ GIT_OPTIONS ?=
 
 RM_TEMP_FILES := rm -rf `find . \( -name UNUSED -o -name SCCS -o -name RCS -o -name '*.o' -o -name '*~' -o -name '.*~' -o -name '*.orig' -o -name 'config.log' -o -name '*.java-*' -o -name '*to-do' -o -name 'TAGS' -o -name '.\#*' -o -name '.deps' -o -name jikes -o -name daikon-java -o -name daikon-output -o -name core -o -name '*.bak' -o -name '*.rej' -o -name '*.old' -o -name '.nfs*' -o -name '\#*\#' \) -print`
 
-# cannot use ?= to set TMPDIR as the evaulation is defered and the time might change
+# cannot use ?= to set TMPDIR as the evaluation is deferred and the time might change
 ifeq ($(origin TMPDIR), undefined)
   TMPDIR := $(if $(shell if [ -d /scratch ] ; then echo true; fi),/scratch/${USER},/tmp/${USER})$(shell date +%Y%m%d%H%M%S)
 endif
 
 # For deterministic sorting
 export LC_ALL=C
-
-## Examples of better ways to get the lists:
-# PERL_MODULES := $(wildcard *.pm)
-# PERL_SCRIPTS := $(wildcard *.pl)
-# PERL_SCRIPTS += em_analyze em_reports cppp
-# PERL_MODULE_TEXI := $(patsubst %.pm,%.texi,${PERL_MODULES})
-# PERL_MODULE_INFO := $(patsubst %.pm,%.info,${PERL_MODULES})
-# PERL_MODULE_MAN := $(patsubst %.pm,%.man,${PERL_MODULES})
-# PERL_MODULE_HTML := $(patsubst %.pm,%.html,${PERL_MODULES})
-
 
 ###########################################################################
 ### Rules
@@ -286,6 +282,9 @@ clean-kvasir:
 ### Testing the code
 # Note that these do NOT compile the code, even if compilation is necessary.
 
+smoke-test:
+	${MAKE} -C java smoke-test
+
 test:
 	${MAKE} -C tests all
 
@@ -296,17 +295,17 @@ junit:
 # are working properly.
 quick-test:
 	cd examples/java-examples/StackAr; \
-	javac -g DataStructures/*.java
+	${JDK_BIN}/javac -g DataStructures/*.java
 	@echo "Running Chicory/Daikon"
 	cd examples/java-examples/StackAr; \
-	java -cp ${QT_PATH} daikon.Chicory --daikon DataStructures.StackArTester
+	${JDK_BIN}/java -cp ${QT_PATH} daikon.Chicory --daikon DataStructures.StackArTester
 	@echo "Running DynComp/Chicory/Daikon"
 	cd examples/java-examples/StackAr; \
-	java -cp ${QT_PATH} daikon.DynComp DataStructures.StackArTester; \
-	java -cp ${QT_PATH} daikon.Chicory --comparability-file=StackArTester.decls-DynComp DataStructures.StackArTester; \
-	java -cp ${QT_PATH} daikon.Daikon StackArTester.dtrace.gz
+	${JDK_BIN}/java -cp ${QT_PATH} daikon.DynComp DataStructures.StackArTester; \
+	${JDK_BIN}/java -cp ${QT_PATH} daikon.Chicory --comparability-file=StackArTester.decls-DynComp DataStructures.StackArTester; \
+	${JDK_BIN}/java -cp ${QT_PATH} daikon.Daikon StackArTester.dtrace.gz
 
-# Sanity check, suitable for continuous integration such as Jenkins or Travis.
+# Sanity check, suitable for continuous integration.
 nightly-test:
 	${MAKE} showvars compile daikon.jar
 	${MAKE} javadoc doc-all
@@ -320,15 +319,6 @@ nightly-test-except-doc-pdf:
 	${MAKE} javadoc doc-all-except-pdf
 	${MAKE} dyncomp-jdk
 	${MAKE} junit test
-
-# Code style; defines `style-check` and `style-fix`.
-# "utils" is temporary; it was changed to ".utils"
-CODE_STYLE_EXCLUSIONS_USER := ${CODE_STYLE_EXCLUSIONS_USER} --exclude-dir kvasir-tests --exclude-dir six170 --exclude-dir .utils --exclude-dir utils --exclude clustering.html --exclude=’*.log’
-ifeq (,$(wildcard .plume-scripts))
-dummy := $(shell git clone --depth=1 -q https://github.com/plume-lib/plume-scripts.git .plume-scripts)
-endif
-include .plume-scripts/code-style.mak
-
 
 ### Tags
 
@@ -377,9 +367,9 @@ test-staged-dist: ${STAGING_DIR}
 	(cd ${DISTTESTDIR}; mv ${NEW_RELEASE_NAME} daikon)
 	${MAKE} -C ${DISTTESTDIR}/daikon/java junit
 	## Make sure that all of the class files are 1.8 (version 52) or earlier.
-	(cd ${DISTTESTDIRJAVA} && find . \( -name '*.class' \) -print0 | xargs -0 -n 1 ${PLUMESCRIPTS}/classfile_check_version 52)
+	(cd ${DISTTESTDIRJAVA} && find . \( -name '*.class' \) -print0 | xargs -0 -n 1 ${PLUME_SCRIPTS}/classfile_check_version 52)
 	## Test that we can rebuild the .class files from the .java files.
-	(cd ${DISTTESTDIRJAVA}/daikon; rm `find . -name '*.class'`; ${MAKE} all_javac)
+	(cd ${DISTTESTDIRJAVA}/daikon/java; rm `find . -name '*.class'`; ${MAKE} compile)
 	## Test that these new .class files work properly.
 	${MAKE} -C ${DISTTESTDIR}/daikon/java junit
 	## Test the main target of the makefile.
@@ -414,7 +404,7 @@ repository-test:
 
 # A couple of checks to see if we can proceed with staging.
 # Verify that doc/CHANGELOG.md is newer than doc/daikon.texinfo - error out if not.
-# Report any uncommited files - users responsibility to act on results.
+# Report any uncommitted files - users responsibility to act on results.
 check-repo: doc/CHANGELOG.md
 	git status -uno
 
@@ -423,6 +413,7 @@ check-repo: doc/CHANGELOG.md
 # daikon.tar.gz, daikon.zip, daikon.jar, javadoc, and the documentation.
 # See the dist target for moving these files to the website.
 staging:
+	${MAKE} -C java check-javadoc-enabled
 # Our intention is that members of the plse_www group will always have
 # write permission on the release directories; however, if you happen
 # to be the owner of an existing file, the permissions system gives
@@ -453,8 +444,7 @@ staging:
 	# Build javadoc
 	@echo "]2;Building Javadoc"
 	mkdir ${STAGING_DIR}/download/api
-	# Javadoc is skipped on Java 8.  Hard-coded JAVA_HOME path is a hack.
-	(export PATH=/usr/lib/jvm/java-11/bin:${PATH}; cd java; ${MAKE} SKIP_JAVADOC=0 'JAVADOC_DEST=${STAGING_DIR}/download/api' javadoc)
+	(cd java; ${MAKE} 'JAVADOC_DEST=${STAGING_DIR}/download/api' javadoc)
 	# Copy the documentation
 	@echo "]2;Copying documentation"
 	mkdir ${STAGING_DIR}/download/doc
@@ -609,11 +599,11 @@ daikon.jar: ${DAIKON_JAVA_FILES} $(patsubst %,java/%,${DAIKON_RESOURCE_FILES})
 		| sort | xargs '-I{}' ${RSYNC_AR} '{}' ${TMPDIR}/daikon-jar
 
 	# make hamcrest and junit4 overwrite junit5 to get our special versions
-	for filename in ${JAR_DIR}/java/lib/*.jar ${JAR_DIR}/java/lib/hamcrest*.jar ${JAR_DIR}/java/lib/junit-4*.jar; do cd ${TMPDIR}/daikon-jar; jar xf $$filename ; done
+	for filename in ${JAR_DIR}/java/lib/*.jar ${JAR_DIR}/java/lib/hamcrest*.jar ${JAR_DIR}/java/lib/junit-4*.jar; do cd ${TMPDIR}/daikon-jar; ${JDK_BIN}/jar xf $$filename ; done
 	(cd java; ${RSYNC_AR} ${DAIKON_RESOURCE_FILES} ${TMPDIR}/daikon-jar)
 	(cd java; ${RSYNC_AR} daikon/tools/runtimechecker/Main.doc daikon/tools/runtimechecker/InstrumentHandler.doc ${TMPDIR}/daikon-jar)
 	cd ${TMPDIR}/daikon-jar && \
-	  jar cfm $@ ${JAR_DIR}/java/daikon/chicory/manifest.txt *
+	  ${JDK_BIN}/jar cfm $@ ${JAR_DIR}/java/daikon/chicory/manifest.txt *
 	mv ${TMPDIR}/daikon-jar/$@ $@
 	#rm -rf ${TMPDIR}/daikon-jar
 
@@ -624,7 +614,7 @@ daikon.jar: ${DAIKON_JAVA_FILES} $(patsubst %,java/%,${DAIKON_RESOURCE_FILES})
 # careful about not including extraneous files in the distribution, and one
 # could make a distribution even if there were diffs in the current
 # checkout.
-daikon.tar daikon.zip: kvasir ${README_PATHS} ${DAIKON_JAVA_FILES} java/Makefile
+daikon.tar daikon.zip: kvasir ${README_PATHS} ${DAIKON_JAVA_FILES} java/Makefile java/java-home.mk
 	${MAKE} doc-all
 	# `make doc-all` just did the work, but check that the files exist.
 	${MAKE} ${DOC_PATHS}
@@ -660,10 +650,6 @@ daikon.tar daikon.zip: kvasir ${README_PATHS} ${DAIKON_JAVA_FILES} java/Makefile
 	# Keep .java files, delete everything else
 	(cd ${TMPDIR}/daikon && find examples/java-examples -name '*.java' -prune -o \( -type f -o -name daikon-output -o -name daikon-java -o -name daikon-instrumented \) -print0 | xargs -0 rm -rf)
 
-	# Perl example files
-	mkdir ${TMPDIR}/daikon/examples/perl-examples
-	(cd examples/perl-examples && cp -p Birthday.accessors Birthday.pm standalone.pl test_bday.pl ${TMPDIR}/daikon/examples/perl-examples)
-
 	# C example files for Kvasir
 	mkdir ${TMPDIR}/daikon/examples/c-examples
 	mkdir ${TMPDIR}/daikon/examples/c-examples/bzip2
@@ -682,17 +668,10 @@ daikon.tar daikon.zip: kvasir ${README_PATHS} ${DAIKON_JAVA_FILES} java/Makefile
 	(cd java; tar chf ${TMPDIR}/daikon-java.tar --exclude daikon-java --exclude daikon-output --exclude Makefile.user --exclude PrototypeChecker.java --exclude VIndexChecker.java --exclude VIndexAnnotatedTypeFactory.java daikon jtb lib typequals)
 	(mkdir ${TMPDIR}/daikon/java; cd ${TMPDIR}/daikon/java; tar xf ${TMPDIR}/daikon-java.tar; rm ${TMPDIR}/daikon-java.tar)
 	cp -p java/Makefile ${TMPDIR}/daikon/java/Makefile
+	cp -p java/java-home.mk ${TMPDIR}/daikon/java/java-home.mk
 	# Maybe I should do  ${MAKE} javadoc
 	# Don't do  ${MAKE} clean  which deletes .class files
 	(cd ${TMPDIR}/daikon/java; ${RM_TEMP_FILES})
-
-	## Front ends
-	mkdir ${TMPDIR}/daikon/front-end
-
-	# Perl front end
-	# mkdir ${TMPDIR}/daikon/front-end/perl
-	cp -pR front-end/perl ${TMPDIR}/daikon/front-end
-	(cd ${TMPDIR}/daikon/front-end/perl; ${RM_TEMP_FILES} )
 
 	# Kvasir C front end
 # We use the --filter option twice with rsync to exclude unneeded files.
@@ -746,20 +725,16 @@ showvars::
 	@echo "NEW_RELEASE_NAME =" ${NEW_RELEASE_NAME}
 	${MAKE} -C java showvars
 
-update-libs:        update-bibtex2web update-checklink update-git-scripts update-html-tools update-plume-scripts-in-utils update-run-google-java-format
-# If .git does not exist, then the directory was created from a Daikon archive file.
-ifneq ($(shell ls ../.git 2>/dev/null),)
-	${MAKE} -C .. git-hooks
-endif
+update-libs:        update-bibtex2web update-checklink update-git-scripts update-html-tools update-plume-scripts update-run-google-java-format
 
-.PHONY: update-libs update-bibtex2web update-checklink update-git-scripts update-html-tools update-plume-scripts-in-utils update-run-google-java-format
+.PHONY: update-libs update-bibtex2web update-checklink update-git-scripts update-html-tools update-plume-scripts update-run-google-java-format
 
 # Unfortunately, I don't see a way for the below not to output lots of "remote:" lines to the log.
 # But, I can avoid doing local output.
 
 update-bibtex2web:
 ifndef NONETWORK
-	if test -d .utils/bibtex2web/.git ; then \
+	@if test -d .utils/bibtex2web/.git ; then \
 	  (cd .utils/bibtex2web && (git pull -q || (sleep 1m && (git pull || true)))) \
 	elif ! test -d .utils/bibtex2web ; then \
 	  (mkdir -p .utils && (git clone -q --depth=1 https://github.com/mernst/bibtex2web.git .utils/bibtex2web || (sleep 1m && git clone -q --depth=1 https://github.com/mernst/bibtex2web.git .utils/bibtex2web))) \
@@ -768,7 +743,7 @@ endif
 
 update-checklink:
 ifndef NONETWORK
-	if test -d .utils/checklink/.git ; then \
+	@if test -d .utils/checklink/.git ; then \
 	  (cd .utils/checklink && (git pull -q || (sleep 1m && (git pull || true)))) \
 	elif ! test -d .utils/checklink ; then \
 	  (mkdir -p .utils && (git clone -q --depth=1 https://github.com/plume-lib/checklink.git .utils/checklink || (sleep 1m && git clone -q --depth=1 https://github.com/plume-lib/checklink.git .utils/checklink))) \
@@ -777,7 +752,7 @@ endif
 
 update-git-scripts:
 ifndef NONETWORK
-	if test -d .utils/git-scripts/.git ; then \
+	@if test -d .utils/git-scripts/.git ; then \
 	  (cd .utils/git-scripts && (git pull -q || (sleep 1m && (git pull || true)))) \
 	elif ! test -d .utils/git-scripts ; then \
 	  (mkdir -p .utils && (git clone -q --depth=1 https://github.com/plume-lib/git-scripts.git .utils/git-scripts || (sleep 1m && git clone -q --depth=1 https://github.com/plume-lib/git-scripts.git .utils/git-scripts))) \
@@ -786,34 +761,25 @@ endif
 
 update-html-tools:
 ifndef NONETWORK
-	if test -d ${HTMLTOOLS}/.git ; then \
+	@if test -d ${HTMLTOOLS}/.git ; then \
 	  (cd ${HTMLTOOLS} && (git pull -q || (sleep 1m && (git pull || true)))) \
 	elif ! test -d ${HTMLTOOLS} ; then \
 	  (mkdir -p .utils && (git clone -q --depth=1 https://github.com/plume-lib/html-tools.git ${HTMLTOOLS} || (sleep 1m && git clone -q --depth=1 https://github.com/plume-lib/html-tools.git ${HTMLTOOLS}))) \
 	fi
 endif
 
-update-plume-scripts-in-utils:
-ifndef NONETWORK
-	if test -d ${PLUMESCRIPTS}/.git ; then \
-	  (cd ${PLUMESCRIPTS} && (git pull -q || (sleep 1m && (git pull || true)))) \
-	elif ! test -d ${PLUMESCRIPTS} ; then \
-	  mkdir -p .utils && (git clone -q --depth=1 https://github.com/plume-lib/plume-scripts.git ${PLUMESCRIPTS} || (sleep 1m && git clone -q --depth=1 https://github.com/plume-lib/plume-scripts.git ${PLUMESCRIPTS})) \
-	fi
-endif
+# update-plume-scripts is defined in .utils/plume-scripts/code-style.mak which
+# is included by this Makefile.
 
 update-run-google-java-format:
 ifndef NONETWORK
-	if test -d .utils/run-google-java-format/.git ; then \
+	@if test -d .utils/run-google-java-format/.git ; then \
 	  (cd .utils/run-google-java-format && (git pull -q || (sleep 1m && (git pull || true)))) \
 	elif ! test -d .utils/run-google-java-format ; then \
 	  (mkdir -p .utils && (git clone -q --depth=1 https://github.com/plume-lib/run-google-java-format.git .utils/run-google-java-format || (sleep 1m && git clone -q --depth=1 https://github.com/plume-lib/run-google-java-format.git .utils/run-google-java-format))) \
 	fi
 endif
 
-.PHONY: git-hooks
-git-hooks: .git/hooks/pre-commit .git/hooks/post-merge
-.git/hooks/pre-commit: scripts/daikon.pre-commit
-	(cd .git/hooks && ln -s ../../scripts/daikon.pre-commit pre-commit)
-.git/hooks/post-merge: scripts/daikon.post-merge
-	(cd .git/hooks && ln -s ../../scripts/daikon.post-merge post-merge)
+.PHONY: all test clean
+all: default
+clean: very-clean

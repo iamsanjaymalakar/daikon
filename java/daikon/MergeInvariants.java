@@ -5,7 +5,6 @@ import static java.util.logging.Level.INFO;
 
 import daikon.split.PptSplitter;
 import daikon.suppress.NIS;
-import gnu.getopt.Getopt;
 import gnu.getopt.LongOpt;
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -33,7 +32,7 @@ import org.plumelib.util.StringsPlume;
  */
 public final class MergeInvariants {
   private MergeInvariants() {
-    throw new Error("do not instantiate");
+    throw new UnsupportedOperationException("do not instantiate");
   }
 
   /** Debug logger. */
@@ -76,7 +75,7 @@ public final class MergeInvariants {
 
   /**
    * This does the work of {@link #main(String[])}, but it never calls System.exit, so it is
-   * appropriate to be called progrmmatically.
+   * appropriate to be called programmatically.
    *
    * @param args the command-line arguments
    * @throws FileNotFoundException if a file cannot be found
@@ -97,14 +96,13 @@ public final class MergeInvariants {
 
     LongOpt[] longopts =
         new LongOpt[] {
-          new LongOpt(Daikon.help_SWITCH, LongOpt.NO_ARGUMENT, null, 0),
           new LongOpt(Daikon.config_option_SWITCH, LongOpt.REQUIRED_ARGUMENT, null, 0),
           new LongOpt(Daikon.debugAll_SWITCH, LongOpt.NO_ARGUMENT, null, 0),
           new LongOpt(Daikon.debug_SWITCH, LongOpt.REQUIRED_ARGUMENT, null, 0),
           new LongOpt(Daikon.track_SWITCH, LongOpt.REQUIRED_ARGUMENT, null, 0),
         };
 
-    Getopt g = new Getopt("daikon.MergeInvariants", args, "ho:", longopts);
+    DaikonGetopt g = new DaikonGetopt(args, "o:", longopts, usage);
     int c;
     while ((c = g.getopt()) != -1) {
       switch (c) {
@@ -112,10 +110,7 @@ public final class MergeInvariants {
         // long option
         case 0:
           String option_name = longopts[g.getLongind()].getName();
-          if (Daikon.help_SWITCH.equals(option_name)) {
-            System.out.println(usage);
-            throw new Daikon.NormalTermination();
-          } else if (Daikon.config_option_SWITCH.equals(option_name)) {
+          if (Daikon.config_option_SWITCH.equals(option_name)) {
             String item = Daikon.getOptarg(g);
             daikon.config.Configuration.getInstance().apply(item);
             break;
@@ -133,13 +128,9 @@ public final class MergeInvariants {
                   "Error parsing track argument '" + Daikon.getOptarg(g) + "' - " + error);
             }
           } else {
-            throw new Daikon.UserError("Unknown long option received: " + option_name);
+            throw new Daikon.BugInDaikon("Unhandled long option " + option_name);
           }
           break;
-
-        case 'h':
-          System.out.println(usage);
-          throw new Daikon.NormalTermination();
 
         case 'o':
           String output_inv_filename = Daikon.getOptarg(g);
@@ -160,12 +151,8 @@ public final class MergeInvariants {
           }
           break;
 
-        case '?':
-          break; // getopt() already printed an error
-
         default:
-          System.out.println("getopt() returned " + c);
-          break;
+          throw new Daikon.BugInDaikon("getopt() returned " + c);
       }
     }
 
@@ -181,14 +168,15 @@ public final class MergeInvariants {
       if (!file.exists()) {
         throw new Daikon.UserError("File " + file + " not found.");
       }
-      if (file.toString().indexOf(".inv") != -1) {
+      String fileString = file.toString();
+      if (fileString.indexOf(".inv") != -1) {
         inv_files.add(file);
-      } else if (file.toString().indexOf(".decls") != -1) {
+      } else if (fileString.indexOf(".decls") != -1) {
         if (decl_file != null) {
           throw new Daikon.UserError("Only one decl file may be specified");
         }
         decl_file = file;
-      } else if (file.toString().indexOf(".spinfo") != -1) {
+      } else if (fileString.indexOf(".spinfo") != -1) {
         splitter_files.add(file);
       } else {
         throw new Daikon.UserError("Unrecognized file type: " + file);
@@ -433,7 +421,7 @@ public final class MergeInvariants {
   }
 
   /**
-   * Ses up the specified relation beteween each of the conditionals in ppt and the matching
+   * Sets up the specified relation between each of the conditionals in ppt and the matching
    * conditionals in child. Each must have the same number of splitters setup in the same order. The
    * splitter match can't be checked because splitters can't be read back in.
    */

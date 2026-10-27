@@ -8,6 +8,7 @@ import static daikon.VarInfo.RefType;
 import static daikon.VarInfo.VarFlags;
 import static daikon.VarInfo.VarKind;
 import static daikon.tools.nullness.NullnessUtil.castNonNullDeep;
+import static java.nio.charset.StandardCharsets.ISO_8859_1;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 import daikon.Daikon.BugInDaikon;
@@ -213,14 +214,17 @@ public final class FileIO {
   // modified since this program point was last executed.
   static HashMap<PptTopLevel, String[]> ppt_to_value_reps = new HashMap<>();
 
-  // For debugging purposes: printing out a modified trace file with
-  // changed modbits.
+  /** For debugging purposes: printing out a modified trace file with changed modbits. */
   private static boolean to_write_nonce = false;
-  private static final String NONCE_HEADER = "this_invocation_nonce";
+
+  /** The line that precedes the nonce in a sample. */
+  public static final String NONCE_HEADER = "this_invocation_nonce";
+
+  /** The current nonce value. */
   private static String nonce_value = "no nonce (yet)";
 
-  // (This implementation as a public static variable is a bit unclean.)
-  // Number of ignored declarations.
+  /** Number of ignored declarations. */
+  // This implementation as a public static variable is a bit unclean.
   public static int omitted_declarations = 0;
 
   // Logging Categories
@@ -375,7 +379,8 @@ public final class FileIO {
     VarDefinition vardef = null;
     List<ParentRelation> ppt_parents = new ArrayList<>();
     EnumSet<PptFlags> ppt_flags = EnumSet.noneOf(PptFlags.class);
-    PptType ppt_type = PptType.POINT;
+    // Null if the declaration has no ppt-type record.
+    PptType ppt_type = null;
 
     try {
       // Read the records that define this program point
@@ -503,9 +508,11 @@ public final class FileIO {
     }
 
     // Build the program point
-    PptTopLevel newppt = new PptTopLevel(ppt_name, ppt_type, ppt_parents, ppt_flags, vi_array);
-
-    return newppt;
+    String type_error = PptTopLevel.type_error(ppt_name, ppt_type);
+    if (type_error != null) {
+      decl_error(state, "%s", type_error);
+    }
+    return new PptTopLevel(ppt_name, ppt_type, ppt_parents, ppt_flags, vi_array);
   }
 
   /** Parses a ppt parent hierarchy record and returns it. */
@@ -521,7 +528,7 @@ public final class FileIO {
     return pr;
   }
 
-  /** Parses a program point flag record. Adds any specified flags to to flags. */
+  /** Parses a program point flag record. Adds any specified flags to flags. */
   private static void parse_ppt_flags(ParseState state, Scanner scanner, EnumSet<PptFlags> flags) {
 
     flags.add(parse_enum_val(state, scanner, PptFlags.class, "ppt flags"));
@@ -1016,6 +1023,9 @@ public final class FileIO {
    * Reads data from {@code .dtrace} files. For each record in the files, calls the appropriate
    * callback in the processor.
    *
+   * @param files the list of {@code .dtrace} files to read. If {@link Daikon#server_dir} is
+   *     non-null, this list may be appended to.
+   * @param all_ppts the set of all program points; may be increased by this method
    * @see #read_data_trace_files(Collection,PptMap,Processor,boolean)
    * @see #read_data_trace_file(String,PptMap,Processor,boolean,boolean)
    */
@@ -1030,6 +1040,10 @@ public final class FileIO {
    * Reads data from {@code .dtrace} files. Calls {@link
    * #read_data_trace_file(String,PptMap,Processor,boolean,boolean)} for each element of filenames.
    *
+   * @param files the list of {@code .dtrace} files to read. If {@link Daikon#server_dir} is
+   *     non-null, this list may be appended to.
+   * @param all_ppts the set of all program points; may be increased by this method
+   * @param processor the function that processes dtrace entries
    * @param ppts_may_be_new true if declarations of ppts read from the data trace file are new (and
    *     thus are not in all_ppts). false if the ppts may already be there.
    * @see #read_data_trace_file(String,PptMap,Processor,boolean,boolean)
@@ -1042,7 +1056,7 @@ public final class FileIO {
       // System.out.printf("processing filename %s%n", filename);
       try {
         read_data_trace_file(filename, all_ppts, processor, false, ppts_may_be_new);
-      } catch (Daikon.NormalTermination e) {
+      } catch (Daikon.NormalTermination | Daikon.UserError e) {
         throw e;
       } catch (Throwable e) {
         if (dkconfig_continue_after_file_exception) {
@@ -1403,7 +1417,7 @@ public final class FileIO {
       // Open the reader stream
       if (raw_filename.equals("-")) {
         // "-" means read from the standard input stream
-        Reader file_reader = new InputStreamReader(System.in, "ISO-8859-1");
+        Reader file_reader = new InputStreamReader(System.in, ISO_8859_1);
         reader = new LineNumberReader(file_reader);
       } else if (raw_filename.equals("+")) { // socket comm with Chicory
         InputStream chicoryInput = connectToChicory();
@@ -1609,13 +1623,16 @@ public final class FileIO {
 
   /**
    * Like read_data_trace_record, but sets global FileIO.data_trace_state for the duration of the
-   * call then clears it before returning. Intended for most external callers.
+   * call then clears it before returning or throwing. Intended for most external callers.
    */
   public static void read_data_trace_record_setstate(ParseState state) throws IOException {
 
     FileIO.data_trace_state = state;
-    read_data_trace_record(state);
-    clear_data_trace_state();
+    try {
+      read_data_trace_record(state);
+    } finally {
+      clear_data_trace_state();
+    }
   }
 
   /**
@@ -1885,7 +1902,7 @@ public final class FileIO {
       // Rather than defining leaves as :::EXIT54 (numbered exit)
       // program points define them as everything except
       // ::EXIT (combined), :::ENTER, :::THROWS, :::OBJECT, ::GLOBAL
-      //  and :::CLASS program points.  This scheme ensures that arbitrarly
+      //  and :::CLASS program points.  This scheme ensures that arbitrarily
       //  named program points such as :::POINT (used by convertcsv.pl)
       //  will be treated as leaves.
 
@@ -2121,6 +2138,17 @@ public final class FileIO {
       if (line == null) {
         throw new Daikon.UserError(
             "Unexpected end of file at "
+                + data_trace_state.filename
+                + " line "
+                + reader.getLineNumber()
+                + lineSep
+                + "  Expected to find variable name"
+                + " for program point "
+                + ppt.name());
+      }
+      if (line.isEmpty()) {
+        throw new Daikon.UserError(
+            "Unexpected end of dtrace record at "
                 + data_trace_state.filename
                 + " line "
                 + reader.getLineNumber()
@@ -2497,7 +2525,7 @@ public final class FileIO {
   }
 
   /**
-   * Read either a serialized PptMap or a InvMap and return a PptMap. If an InvMap is specified, it
+   * Read either a serialized PptMap or an InvMap and return a PptMap. If an InvMap is specified, it
    * is converted to a PptMap.
    *
    * @param file the input file
@@ -2656,9 +2684,8 @@ public final class FileIO {
           post_esc = this_esc + 2;
           break;
         case '\\':
-          // This is not in the default case because the search would find
-          // the quoted backslash.  Here we incluce the first backslash in
-          // the output, but not the first.
+          // This is not in the default case because the search would find the quoted backslash.
+          // This code puts just one of the two backslashes in the output.
           sb.append(orig.substring(post_esc, this_esc + 1));
           post_esc = this_esc + 2;
           break;
@@ -2798,11 +2825,11 @@ public final class FileIO {
       assert (arr_dims == 0) || (arr_dims == 1)
           : String.format(
               "array dimensions==%s, should be 0 or 1, for variable %s", arr_dims, name);
-      assert !rep_type.isArray() || arr_dims == 1
-          : String.format("array dimensions is 0, should be 1, for variable %s", name);
       if (rep_type == null) {
         throw new AssertionError("missing rep-type information for variable " + name);
       }
+      assert !rep_type.isArray() || arr_dims == 1
+          : String.format("array dimensions is 0, should be 1, for variable %s", name);
       if (declared_type == null) {
         throw new AssertionError("missing dec-type information for variable " + name);
       }
@@ -2816,6 +2843,68 @@ public final class FileIO {
       if ((kind == VarKind.FIELD || kind == VarKind.ARRAY) && enclosing_var_name == null) {
         throw new AssertionError("enclosing-var not specified for variable " + name);
       }
+      checkBound("min-value", min_value);
+      checkBound("max-value", max_value);
+    }
+
+    /**
+     * Throws an AssertionError if the given min-value or max-value bound is not valid for this
+     * variable's rep type. Only a variable whose (element) rep type is integral or floating-point
+     * may have a bound. An integral variable's bound must be an integer in the range of a Java
+     * long, and a floating-point variable's bound must be a number other than NaN. These are the
+     * values that {@link VarInfoAux#getLong} and {@link VarInfoAux#getDouble} accept.
+     *
+     * @param record the name of the record, for the error message
+     * @param bound the bound, or null if none was specified
+     */
+    private void checkBound(String record, @Nullable String bound) {
+      if (bound == null) {
+        return;
+      }
+      if (!rep_type.baseIsIntegral() && !rep_type.baseIsFloat()) {
+        throw new AssertionError(
+            String.format(
+                "%s is not permitted for variable %s, whose rep type is %s",
+                record, name, rep_type));
+      }
+      @Nullable NumberFormatException cause = null;
+      try {
+        if (rep_type.baseIsIntegral()) {
+          Long.parseLong(bound);
+          return;
+        } else if (!Double.isNaN(Double.parseDouble(bound))) {
+          return;
+        }
+      } catch (NumberFormatException e) {
+        cause = e;
+      }
+      throw new AssertionError(
+          String.format(
+              "%s '%s' for variable %s is not a valid %s value",
+              record, bound, name, rep_type.base()),
+          cause);
+    }
+
+    /**
+     * Parses a min-value or max-value record. If this variable's rep type is already known, checks
+     * the bound now, so that an error message reports the line of the bound record. Otherwise,
+     * {@link #checkRep} checks it.
+     *
+     * @param scanner the scanner, pointing at the bound
+     * @param record the name of the record
+     * @return the bound
+     */
+    private @Interned String parse_bound(Scanner scanner, String record) {
+      @Interned String bound = need(scanner, record);
+      need_eol(scanner);
+      if (rep_type != null) {
+        try {
+          checkBound(record, bound);
+        } catch (AssertionError e) {
+          decl_error(state, e);
+        }
+      }
+      return bound;
     }
 
     /** Initialize from the 'variable <em>name</em>' record. Scanner should be pointing at name. */
@@ -2950,7 +3039,7 @@ public final class FileIO {
       // System.out.printf("flags for %s are %s%n", name, flags);
     }
 
-    /** Parse the langauge specific flags record. Multiple flags can be specified. */
+    /** Parse the language-specific flags record. Multiple flags can be specified. */
     public void parse_lang_flags(Scanner scanner) {
 
       lang_flags.add(parse_enum_val(scanner, LangFlags.class, "Language Specific Flag"));
@@ -3018,14 +3107,12 @@ public final class FileIO {
 
     /** Parse a minimum value record. */
     public void parse_min_value(Scanner scanner) {
-      this.min_value = need(scanner, "minimum value");
-      need_eol(scanner);
+      this.min_value = parse_bound(scanner, "min-value");
     }
 
     /** Parse a maximum value record. */
     public void parse_max_value(Scanner scanner) {
-      this.max_value = need(scanner, "maximum value");
-      need_eol(scanner);
+      this.max_value = parse_bound(scanner, "max-value");
     }
 
     /** Parse a minimum length record. */
@@ -3060,7 +3147,7 @@ public final class FileIO {
 
     /**
      * Looks up the next token as a member of enum_class. Throws Daikon.UserError if there is no
-     * token or if it is not valid member of the class. Enums are presumed to be in in upper case.
+     * token or if it is not a valid member of the class. Enums are presumed to be in upper case.
      */
     public <E extends Enum<E>> E parse_enum_val(
         Scanner scanner, Class<E> enum_class, String descr) {
@@ -3088,7 +3175,7 @@ public final class FileIO {
 
   /**
    * Looks up the next token as a member of enum_class. Throws Daikon.UserError if there is no token
-   * or if it is not valid member of the class. Enums are presumed to be in in upper case.
+   * or if it is not a valid member of the class. Enums are presumed to be in upper case.
    */
   public static <E extends Enum<E>> E parse_enum_val(
       ParseState state, Scanner scanner, Class<E> enum_class, String descr) {

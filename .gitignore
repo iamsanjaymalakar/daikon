@@ -27,6 +27,8 @@ java/dcomp_premain.jar
 java/*.class
 java/**/*.class
 java/lib/tmp
+# Directory generated when building daikon-plumelib.jar
+java/lib/.gradle
 # Temporary file used during compilation
 java/java_files.txt
 java/javadoc-files.txt
@@ -65,10 +67,7 @@ java/daikon/chicory/ChicoryTest.log
 java/daikon/chicory/debug/
 
 # Obtained via Git
-.plume-scripts
 .utils
-# temporary; "utils/" is an old name for ".utils/".
-utils
 
 # Documentation (including WWW pages and the manual)
 doc/.fix-dev-menu
@@ -111,9 +110,6 @@ doc/developer.vr
 doc/developer/
 doc/developer_manual_html/
 doc/images/daikon-logo.pdf
-doc/images/dfepl-flow.eps
-doc/images/dfepl-flow.jpg
-doc/images/dfepl-flow.pdf
 doc/invariants-doc.texinfo
 doc/www/pubs
 
@@ -348,6 +344,8 @@ make-typecheck-nullness-output.txt*
 tests/chicory-tests/option-tests/DataStructures
 tests/chicory-tests/option-tests/StackArTester.dtrace.gz
 tests/chicory-tests/option-tests/StackArTesterException.dtrace.gz
+tests/daikon-tests/ncalc/libcalculator.so
+tests/daikon-tests/ncalc/ncalc.h
 tests/dyncomp-tests/Apples/Apples
 tests/dyncomp-tests/DerivedComparability/DerivedComparability
 tests/dyncomp-tests/FloatTest/FloatTest
@@ -522,9 +520,6 @@ tests/**/merged/
 
 # Coverity intermediate files
 java/cov-int/
-
-# Directory used for creating docker images
-scripts/dockerdir/
 
 # PMD
 java/pmd-output.txt

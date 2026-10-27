@@ -6,6 +6,7 @@ import static daikon.VarInfo.VarFlags;
 import static daikon.tools.nullness.NullnessUtil.*;
 
 import daikon.Daikon;
+import daikon.DaikonGetopt;
 import daikon.FileIO;
 import daikon.Global;
 import daikon.PptMap;
@@ -38,7 +39,7 @@ public class DtraceDiff {
 
   /** Do not instantiate. */
   private DtraceDiff() {
-    throw new Error("Do not instantiate");
+    throw new UnsupportedOperationException("Do not instantiate");
   }
 
   /** The usage message for this program. */
@@ -102,11 +103,50 @@ public class DtraceDiff {
 
   /**
    * This does the work of {@link #main(String[])}, but it never calls System.exit, so it is
-   * appropriate to be called progrmmatically.
+   * appropriate to be called programmatically.
+   *
+   * <p>Only {@code args} specify which program points and variables to compare. This method ignores
+   * the values that {@link Daikon#ppt_regexp}, {@link Daikon#ppt_omit_regexp}, {@link
+   * Daikon#var_regexp}, {@link Daikon#var_omit_regexp}, {@link Daikon#ppt_max_name}, and {@link
+   * FileIO#new_decl_format} have on entry, and it restores those values before it returns.
    *
    * @param args command-line arguments, like those of {@link #main}
    */
   public static void mainHelper(final String[] args) {
+    Pattern oldPptRegexp = Daikon.ppt_regexp;
+    Pattern oldPptOmitRegexp = Daikon.ppt_omit_regexp;
+    Pattern oldVarRegexp = Daikon.var_regexp;
+    Pattern oldVarOmitRegexp = Daikon.var_omit_regexp;
+    String oldPptMaxName = Daikon.ppt_max_name;
+    Boolean oldNewDeclFormat = FileIO.new_decl_format;
+    Daikon.ppt_regexp = null;
+    Daikon.ppt_omit_regexp = null;
+    Daikon.var_regexp = null;
+    Daikon.var_omit_regexp = null;
+    Daikon.ppt_max_name = null;
+    try {
+      parseArgsAndDiff(args);
+    } finally {
+      Daikon.ppt_regexp = oldPptRegexp;
+      Daikon.ppt_omit_regexp = oldPptOmitRegexp;
+      Daikon.var_regexp = oldVarRegexp;
+      Daikon.var_omit_regexp = oldVarOmitRegexp;
+      Daikon.ppt_max_name = oldPptMaxName;
+      if (oldNewDeclFormat == null) {
+        FileIO.resetNewDeclFormat();
+      } else {
+        FileIO.new_decl_format = oldNewDeclFormat;
+      }
+    }
+  }
+
+  /**
+   * Processes the command-line arguments, which set Daikon's ppt and variable filters, and then
+   * compares the two dtrace files that they name.
+   *
+   * @param args command-line arguments, like those of {@link #main}
+   */
+  private static void parseArgsAndDiff(final String[] args) {
     Set<File> declsfile1 = new HashSet<>();
     String dtracefile1 = null;
     Set<File> declsfile2 = new HashSet<>();
@@ -124,7 +164,7 @@ public class DtraceDiff {
           new LongOpt(Daikon.config_option_SWITCH, LongOpt.REQUIRED_ARGUMENT, null, 0),
         };
 
-    Getopt g = new Getopt("daikon.tools.DtraceDiff", args, "h:", longopts);
+    DaikonGetopt g = new DaikonGetopt(args, "", longopts, usage);
     int c;
     while ((c = g.getopt()) != -1) {
       switch (c) {
@@ -132,10 +172,7 @@ public class DtraceDiff {
         // long option
         case 0:
           String option_name = longopts[g.getLongind()].getName();
-          if (Daikon.help_SWITCH.equals(option_name)) {
-            System.out.println(usage);
-            throw new Daikon.NormalTermination();
-          } else if (Daikon.ppt_regexp_SWITCH.equals(option_name)) {
+          if (Daikon.ppt_regexp_SWITCH.equals(option_name)) {
             if (Daikon.ppt_regexp != null) {
               throw new Error(
                   "multiple --"
@@ -224,20 +261,11 @@ public class DtraceDiff {
             Configuration.getInstance().apply(item);
             break;
           } else {
-            throw new RuntimeException("Unknown long option received: " + option_name);
+            throw new Daikon.BugInDaikon("Unhandled long option " + option_name);
           }
 
-        // short options
-        case 'h':
-          System.out.println(usage);
-          throw new Daikon.NormalTermination();
-
-        case '?':
-          break; // getopt() already printed an error
-
         default:
-          System.out.println("getopt() returned " + c);
-          break;
+          throw new Daikon.BugInDaikon("getopt() returned " + c);
       }
     }
 
@@ -427,7 +455,7 @@ public class DtraceDiff {
 
   /**
    * Compare two VarInfos for equality. Note there are many fields not compared: comparability,
-   * constant, exclosing-var and parent, for example.
+   * constant, enclosing-var and parent, for example.
    *
    * @param vi1 a VarInfo to compare
    * @param vi2 a VarInfo to compare
@@ -457,7 +485,7 @@ public class DtraceDiff {
 
   /**
    * Used for debugging -- prints some of a VarInfo fields. Note there are many fields not printed:
-   * comparability, constant, exclosing-var and parent, for example.
+   * comparability, constant, enclosing-var and parent, for example.
    *
    * @param vi the VarInfo to print
    */

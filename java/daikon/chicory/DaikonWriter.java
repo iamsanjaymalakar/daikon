@@ -1,6 +1,7 @@
 package daikon.chicory;
 
 import daikon.Chicory;
+import daikon.plumelib.reflection.Signatures;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Member;
@@ -19,7 +20,7 @@ public abstract class DaikonWriter {
 
   /** Create a new DaikonWriter. */
   protected DaikonWriter() {
-    // This constructor is intentially empty.
+    // This constructor is intentionally empty.
   }
 
   /**
@@ -161,15 +162,12 @@ public abstract class DaikonWriter {
       fullname = declaring_class.getName() + "." + declaring_class.getSimpleName();
       params = constructor.getParameterTypes();
     }
-    String param_str = "";
+    StringJoiner param_str = new StringJoiner(", ");
     for (Class<?> param : params) {
-      if (param_str.length() > 0) {
-        param_str += ", ";
-      }
       if (param.isArray()) {
-        param_str += Runtime.classGetNameToBinaryName(param.getName());
+        param_str.add(Signatures.classGetNameToBinaryName(param.getName()));
       } else {
-        param_str += param.getName();
+        param_str.add(param.getName());
       }
     }
     return String.format("%s(%s):::%s", fullname, param_str, point);
@@ -190,7 +188,7 @@ public abstract class DaikonWriter {
    * classes).
    */
   public static @BinaryName String stdClassName(Class<?> type) {
-    return Runtime.classGetNameToBinaryName(type.getName());
+    return Signatures.classGetNameToBinaryName(type.getName());
   }
 
   /** Escapes blanks and backslashes in names written to the decl/dtrace files. */

@@ -5,7 +5,7 @@ import daikon.inv.DummyInvariant;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.lang.reflect.InvocationTargetException;
+import java.nio.file.NoSuchFileException;
 import org.checkerframework.checker.lock.qual.GuardSatisfied;
 import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 import org.checkerframework.checker.nullness.qual.Nullable;
@@ -22,7 +22,7 @@ import typequals.prototype.qual.Prototype;
  */
 public class SplitterObject implements Comparable<SplitterObject> {
 
-  private @MonotonicNonNull Splitter splitter;
+  private @Nullable Splitter splitter;
   private String condition; // the condition
   private @BinaryName String className = "Unassigned"; // the Java classname of this Splitter
   private String directory; // the directory where it resides
@@ -67,7 +67,7 @@ public class SplitterObject implements Comparable<SplitterObject> {
   static @Nullable Class<?> defineSplitterClass(@BinaryName String className, String fileName) {
     try {
       return ReflectionPlume.defineClassFromFile(className, fileName);
-    } catch (FileNotFoundException e) {
+    } catch (FileNotFoundException | NoSuchFileException e) {
       if (!PptSplitter.dkconfig_suppressSplitterErrors) {
         System.out.println(
             "File " + fileName.substring(0, fileName.length() - 6) + ".java did not compile");
@@ -84,23 +84,32 @@ public class SplitterObject implements Comparable<SplitterObject> {
               "This indicates a possible problem with configuration option",
               "daikon.split.SplitterFactory.compiler whose value is: "
                   + SplitterFactory.dkconfig_compiler));
+    } catch (ClassFormatError cfe) {
+      // For example, a class file that was truncated because its compilation was killed.
+      if (!PptSplitter.dkconfig_suppressSplitterErrors) {
+        System.out.println("Malformed class file " + fileName + ": " + cfe);
+      }
+      return null;
     }
   }
 
   /** Sets the "splitter" field of this object to a newly-instantiated object. */
   public void load() {
-    Class<?> tempClass = defineSplitterClass(className, directory + className + ".class");
+    // Clear any splitter from an earlier call, in case this call fails.
+    splitter = null;
+    exists = false;
+    Class<?> tempClass = defineSplitterClass(className, getFullClassPath());
     if (tempClass != null) {
+      Splitter newSplitter;
       try {
-        splitter = (Splitter) tempClass.getDeclaredConstructor().newInstance();
-      } catch (ClassFormatError
-          | IllegalAccessException
-          | InstantiationException
-          | InvocationTargetException
-          | NoSuchMethodException e) {
-        e.printStackTrace(System.out);
-        throw new Error("Trying to invoke " + tempClass + " constructor", e);
+        newSplitter = (Splitter) tempClass.getDeclaredConstructor().newInstance();
+      } catch (ReflectiveOperationException | LinkageError | RuntimeException e) {
+        // LinkageError includes VerifyError and ExceptionInInitializerError.
+        // RuntimeException includes ClassCastException.
+        errorMessage = "Cannot instantiate " + tempClass + " for " + this.toString() + ": " + e;
+        return;
       }
+      splitter = newSplitter;
       DummyInvariant dummy =
           new @Prototype
           DummyInvariant(
@@ -116,14 +125,7 @@ public class SplitterObject implements Comparable<SplitterObject> {
       errorMessage = "Splitter exists " + this.toString();
       exists = true;
     } else {
-      errorMessage =
-          "No class data for "
-              + this.toString()
-              + ", to be loaded from "
-              + directory
-              + className
-              + ".class";
-      exists = false;
+      errorMessage = "Cannot load the class for " + this.toString() + " from " + getFullClassPath();
     }
   }
 
@@ -162,9 +164,7 @@ public class SplitterObject implements Comparable<SplitterObject> {
     return this.splitter;
   }
 
-  /**
-   * Set the error message of this this SplitterObject. This indicates the status of the Splitter.
-   */
+  /** Set the error message of this SplitterObject. This indicates the status of the Splitter. */
   public void setError(String errorMessage) {
     this.errorMessage = errorMessage;
   }
@@ -194,6 +194,15 @@ public class SplitterObject implements Comparable<SplitterObject> {
   }
 
   /**
+   * Returns the path of the class file of the Splitter.
+   *
+   * @return the path of the class file of the Splitter
+   */
+  public String getFullClassPath() {
+    return (directory + className + ".class");
+  }
+
+  /**
    * Returns the program point represented by this Splitter.
    *
    * @return the program point represented by this Splitter
@@ -205,7 +214,7 @@ public class SplitterObject implements Comparable<SplitterObject> {
   /** Set the className of this Splitter. */
   public void setClassName(@BinaryName String className) {
     this.className = className;
-    classFile = new File(directory + className + ".class");
+    classFile = new File(getFullClassPath());
   }
 
   /**

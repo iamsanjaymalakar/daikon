@@ -9,6 +9,7 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.StringJoiner;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.regex.Pattern;
@@ -91,6 +92,15 @@ public class DynComp {
   /** Causes DynComp to traverse exactly those fields visible from a given program point. */
   @Option("Use standard visibility")
   public static boolean std_visibility = false;
+
+  /**
+   * If true, DynComp never calls a method of the target program's objects. For example, DynComp
+   * does not process the elements of a {@code java.util.List}, which requires calling its {@code
+   * toArray()} method. When running Chicory with {@code --no-method-calls}, supply this option to
+   * DynComp as well.
+   */
+  @Option("Never call methods of the target program's objects")
+  public static boolean no_method_calls = false;
 
   /** Depth to which to examine structure components. */
   @Option("Variable nesting depth")
@@ -178,7 +188,7 @@ public class DynComp {
   public static void check_args(Options options, String[] targetArgs) {
     if (help) {
       options.printUsage();
-      System.exit(1);
+      System.exit(0);
     }
     if (nesting_depth < 0) {
       System.out.printf("nesting depth (%d) must not be negative%n", nesting_depth);
@@ -304,6 +314,10 @@ public class DynComp {
       // allow DCRuntime to make reflective access to java.land.Object.clone() without a warning
       cmdlist.add("--add-opens");
       cmdlist.add("java.base/java.lang=ALL-UNNAMED");
+      if (Runtime.isJava24orLater()) {
+        // needed to eliminate warning for JNI access to native code
+        cmdlist.add("--enable-native-access=ALL-UNNAMED");
+      }
       if (!no_jdk) {
         // If we are processing JDK classes, then we need our code on the boot classpath as well.
         // Otherwise, references to DCRuntime from the JDK would fail.
@@ -415,15 +429,21 @@ public class DynComp {
    * @param args the list of arguments
    * @return argument string
    */
-  public String argsToString(List<String> args) {
-    String str = "";
+  public static String argsToString(List<String> args) {
+    StringJoiner result = new StringJoiner(" ");
     for (String arg : args) {
       if (arg.indexOf(' ') != -1) {
-        arg = "'" + arg + "'";
+        if (arg.indexOf('\'') == -1) {
+          arg = "'" + arg + "'";
+        } else if (arg.indexOf('\"') == -1) {
+          arg = "\"" + arg + "\"";
+        } else {
+          throw new Error("Cannot quote: " + arg);
+        }
       }
-      str += arg + " ";
+      result.add(arg);
     }
-    return str.trim();
+    return result.toString();
   }
 
   /**

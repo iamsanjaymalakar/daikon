@@ -21,6 +21,74 @@ Further documentation can be found in:
      `make -C $DAIKONDIR/java javadoc`
    It is also available at <http://plse.cs.washington.edu/daikon/download/api/> .
 
+## Version 5.9.1 (???, 2026)
+
+* Daikon and its tools now reject a malformed command-line option.
+* All tools accept `-h` and `--help`, which print a usage message and exit
+   with status 0.
+* `daikon.diff.Diff` no longer accepts the `-u` and `-z` options, which had
+   no effect.
+* Chicory's `--comparability-file` command-line option accepts any version
+   2.0 declaration file, such as one written by Chicory, rather than only one
+   written by DynComp.  A variable with no `comparability` record is
+   comparable to every other variable.
+* `daikon.bashrc` sets only `DAIKONDIR` and `PATH`.  It no longer sets
+   `JAVA_HOME`, `DAIKON_CLASSPATH`, `DAIKONSCRIPTS`, `PLUME_SCRIPTS`, `PERLLIB`,
+   or `PERL5LIB`.
+* Removed the Perl front end, dfepl.
+
+Scripts:
+
+* `convertcsv.pl` now writes version 2 files.
+* `convertcsv.pl -decl`, `dtrace-count.pl`, `dtrace-diff.pl`,
+  `dtrace-indent.pl`, and `sort-dtrace.pl` no longer accept version 1
+  declarations.
+* `dtrace-diff.pl` reads program point declarations from the .dtrace files,
+  so its .decls file argument is now optional.  It no longer accepts the
+  `--ignore_exitno` option, which had no effect.
+* Removed scripts that processed only version 1 files:  `auxinfo.pl`,
+  `clean-decls.php`, `copy_comparable.pl`, `decls2comp-1.0.py`,
+  `decls-lackwit-disjoint.pl`, `dfec-to-kvasir.py`, `dfec-to-kvasir-dtrace.py`,
+  `dtrace-rm-decls.php`, `find_comparable.pl`, `find_globals.pl`,
+  `generate-dec-types.py`, `lwpp.pl`, `lwpp-init.pl`, and `set_decl_type.pl`.
+
+Fjalar/Kvasir:
+
+* New command-line option `--dyncomp-unhandled-ops=warn` makes DynComp
+  print a warning and continue, rather than stop, when it encounters a VEX IR
+  operation that it does not handle.
+
+Chicory and DynComp:
+
+* New command-line option `--no-method-calls` makes Chicory and DynComp never
+  call methods of the target program's objects, such as calling `toArray()` on
+  a list.
+
+## Version 5.9.0 (September 1, 2026)
+
+* All Daikon tools now work with Java 8-26.
+* Compiling Daikon with Java 8 is no longer supported.
+
+DynComp:
+
+* Fixed instrumentation problem in some methods with multiple constructors.
+
+Fjalar/Kvasir:
+
+* Fixed problem with multi-dimensional array support.
+* Improved support for clang compiler.
+* Added support for DWARF-4 binary format (in addition to 2 & 3).
+* Initial support for Rust programs.
+
+## Version 5.8.24 (May 6, 2026)
+
+All Daikon tools now work with Java 8-25.
+
+Bug fixes and implementation details:
+
+* Kvasir now supports DWARF-3 in addition to DWARF-2.
+* fixed Daikon issue 618
+
 ## Version 5.8.22 (June 3, 2025)
 
 All Daikon tools now work with Java 8-24.
@@ -1480,7 +1548,7 @@ User-visible changes
   Bug-fixes
 
 * Fixed a problem with clone where the instrumentation incorrectly added a
-    call to a instrumented version of clone where it did not exist.
+    call to an instrumented version of clone where it did not exist.
 
 * Fixed some problems with the instrumentation of equals.
 
@@ -2531,7 +2599,7 @@ a Bugzilla database.
 
 ### General
 
-  Daikon problems are now tracked in the Bugzilla database at at:
+  Daikon problems are now tracked in the Bugzilla database at:
   <http://pag.csail.mit.edu/bugzilla/>.  There are separate products for
   Daikon and Kvasir.  Problems with Chicory and other front ends
   should be submitted against the Daikon product.

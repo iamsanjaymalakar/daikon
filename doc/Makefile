@@ -4,8 +4,9 @@ all-except-pdf: config-options.texinfo invariants-doc.texinfo html-chap html
 TEXI2HTML ?= makeinfo --html
 
 HTMLTOOLS ?= ../.utils/html-tools
+PLUME_SCRIPTS ?= ../.utils/plume-scripts
 # `cronic` suppresses output unless the wrapped command fails.
-CRONIC ?= ../.utils/plume-scripts/cronic
+CRONIC ?= ${PLUME_SCRIPTS}/cronic
 
 daikon.info: daikon.texinfo config-options.texinfo invariants-doc.texinfo
 # Large split size fixes an apparent bug in makeinfo 4.11:
@@ -39,24 +40,13 @@ invariants-doc.texinfo:
 .PHONY : invariants-doc.texinfo
 endif
 
-images/%.eps: images/%.dot
-	dot -Tps $< >$@
-
-# Create a jpg version of the dfepl flow, blow up by 4X to get cleaner
-# output.
-images/dfepl-flow.jpg: images/dfepl-flow.eps
-	pstopnm -portrait -stdout -xsize 2000 $<  \
-	  | pnmcrop \
-	  | pnmscale 0.25 \
-	  | pnmmargin -white 20 | pnmtojpeg > images/dfepl-flow.jpg
-
 images/%.pdf: images/%.eps
 	epstopdf $< --outfile=$@
 
 .PHONY: html
 html: daikon.html developer.html
 
-daikon.html: daikon.texinfo config-options.texinfo invariants-doc.texinfo images/dfepl-flow.jpg
+daikon.html: daikon.texinfo config-options.texinfo invariants-doc.texinfo
 	${MAKE} daikon-html
 
 # Just builds .html from .texinfo.
@@ -68,9 +58,9 @@ daikon-fast: daikon.texinfo
 ../.utils/html-tools:
 	${MAKE} -C .. update-html-tools
 
-${CRONIC}: ../.utils/plume-scripts
-../.utils/plume-scripts:
-	${MAKE} -C .. update-plume-scripts-in-utils
+${CRONIC}: ${PLUME_SCRIPTS}
+${PLUME_SCRIPTS}:
+	${MAKE} -C .. update-plume-scripts
 
 .PHONY: daikon-html
 # Does the actual work
@@ -90,7 +80,7 @@ html-chap: daikon/index.html developer/index.html
 
 # The "subdir" flag does not copy over images, so the
 # pathnames become incorrect.  We need to copy them over ourselves.
-daikon/index.html: daikon.texinfo config-options.texinfo invariants-doc.texinfo images/dfepl-flow.jpg ../.utils/html-tools ${CRONIC}
+daikon/index.html: daikon.texinfo config-options.texinfo invariants-doc.texinfo ../.utils/html-tools ${CRONIC}
 	rm -rf daikon/*
 	${CRONIC} ${TEXI2HTML} --split=chapter -o daikon $<
 	# Fixup 'bad' href(s) inserted by makeinfo.
@@ -98,7 +88,6 @@ daikon/index.html: daikon.texinfo config-options.texinfo invariants-doc.texinfo 
 	perl -pi -e 's|href="CHANGELOG.md"|href="../CHANGELOG.md"|;' daikon/*.html
 	mkdir daikon/images
 	cp images/*.png daikon/images
-	cp images/*.jpg daikon/images
 	cd daikon && ../${HTMLTOOLS}/html-add-favicon . ../daikon-favicon.png
 
 developer/index.html: developer.texinfo ../.utils/html-tools ${CRONIC}
@@ -108,38 +97,15 @@ developer/index.html: developer.texinfo ../.utils/html-tools ${CRONIC}
 	perl -pi -e 's|../dir/index.html|../index.html|;' developer/index.html
 	mkdir developer/images
 	cp images/*.png developer/images
-	cp images/*.jpg developer/images
 	cd developer && ../${HTMLTOOLS}/html-add-favicon . ../daikon-favicon.png
 
-pdf: daikon.pdf images/dfepl-flow.eps developer.pdf
+pdf: daikon.pdf developer.pdf
 
-# Under Rocky Linux, trying to use `cronic` with `makeinfo` leads to errors
-# because of undefined variables:  COMSPEC, ComSpec, BIBINPUTS, BSTINPUTS, ...
 daikon.pdf: daikon.texinfo config-options.texinfo invariants-doc.texinfo ${CRONIC}
-	if [ -f /etc/os-release ]; then \
-	    . /etc/os-release; \
-	    if [ "$$ID" = "rocky" ] && [ "$$VERSION_ID" != "$${VERSION_ID#9}" ]; then \
-	        NO_CRONIC="yes"; \
-	    fi; \
-	fi; \
-	if [ -n $$NO_CRONIC ] ; then \
-	  makeinfo --pdf $<; \
-	else \
-	  ${CRONIC} makeinfo --pdf $<; \
-	fi
+	${CRONIC} makeinfo --pdf $<
 
 developer.pdf: developer.texinfo ${CRONIC}
-	if [ -f /etc/os-release ]; then \
-	    . /etc/os-release; \
-	    if [ "$$ID" = "rocky" ] && [ "$$VERSION_ID" != "$${VERSION_ID#9}" ]; then \
-	        NO_CRONIC="yes"; \
-	    fi; \
-	fi; \
-	if [ -n $$NO_CRONIC ] ; then \
-	  makeinfo --pdf $<; \
-	else \
-	  ${CRONIC} makeinfo --pdf $<; \
-	fi
+	${CRONIC} makeinfo --pdf $<
 
 # Note that the clean target does not remove invariants-doc.texinfo or
 # config-options.texinfo.
@@ -153,7 +119,6 @@ clean: texi-clean
 	rm -f developer.tmp \
 		developer.info developer.info-[0-9] \
 		developer.log developer.dvi developer.pdf developer.html
-	rm -f images/dfepl-flow.{eps,pdf,jpg}
 	rm -f *.bak
 
 texi-clean:
@@ -188,3 +153,5 @@ spell-check:
 # 4+ spaces (assumed to be literal code or commands.  Permit some failures.
 	@echo "The following command is allowed to have some failures not in daikon.dict"
 	head -100 CHANGELOG.md | sed 's/^    .*/ /' | hunspell -u -p daikon.dict
+
+.PHONY: all test clean

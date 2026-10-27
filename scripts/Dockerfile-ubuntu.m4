@@ -1,0 +1,132 @@
+dockerfile_header(Dockerfile-ubuntu.m4)
+
+# "ubuntu" is the latest LTS release.  "ubuntu:rolling" is the latest release.
+# Either might lag behind; as of 2024-11-16, ubuntu:rolling was still 24.04 rather than 24.10.
+FROM ubuntu[[]]m4_ifelse(m4_eval(JDKVER >= 25), 1, [[:rolling]])
+LABEL org.opencontainers.image.authors="Michael Ernst <mernst@cs.washington.edu>"
+
+# According to
+# https://docs.docker.com/engine/userguide/eng-image/dockerfile_best-practices/:
+#  * Put "apt-get update" and "apt-get install" in the same RUN command.
+#  * Do not run "apt-get upgrade"; instead get upstream to update.
+
+RUN export DEBIAN_FRONTEND=noninteractive \
+&& apt-get -qqy update \
+&& apt-get -qqy install locales \
+&& rm -rf /var/lib/apt/lists/* \
+&& locale-gen "en_US.UTF-8"
+ENV LANG=en_US.UTF-8 \
+    LANGUAGE=en_US:en \
+    LC_ALL=en_US.UTF-8
+
+RUN export DEBIAN_FRONTEND=noninteractive \
+&& apt-get -qqy update \
+&& apt-get -qqy install \
+  apt-utils
+
+RUN export DEBIAN_FRONTEND=noninteractive \
+&& apt-get -qqy update \
+&& apt-get -qqy install \
+  autoconf \
+  automake \
+  bc \
+  binutils-dev \
+  curl \
+  gcc \
+  git \
+  jq \
+  libcrypt-dev \
+  lsb-release \
+  m4 \
+  make \
+  rsync \
+  unzip \
+  wget
+
+# Install the JDK.
+m4_ifelse(jdk_packaged_by_every_os, 1, [[RUN export DEBIAN_FRONTEND=noninteractive \
+&& apt-get -qqy update \
+&& apt-get -qqy install \
+  openjdk-JDKVER-jdk \
+&& update-java-alternatives --set java-1.JDKVER.0-openjdk-amd64
+m4_ifelse(m4_eval(JDKVER >= 25), 1, [[ENV JAVA[[]]JDKVER[[]]_HOME=/usr/lib/jvm/java-JDKVER-openjdk-amd64
+]])]], [[# Not every OS packages a non-LTS JDK, so download the JDK.
+RUN curl --silent -o jdk-JDKVER[[]]_linux-x64_bin.tar.gz jdk_download_url \
+&& tar xzf jdk-JDKVER[[]]_linux-x64_bin.tar.gz \
+&& rm jdk-JDKVER[[]]_linux-x64_bin.tar.gz
+ENV PATH="/jdk-JDKVER/bin:$PATH"
+ENV JAVA[[]]JDKVER[[]]_HOME=/jdk-JDKVER
+]])m4_dnl
+if_plus([[
+# These are needed to build the Checker Framework, used by the "typecheck" job in CI.
+RUN export DEBIAN_FRONTEND=noninteractive \
+&& apt-get -qqy update \
+&& apt-get -qqy install \
+  ant \
+  maven \
+  python3
+
+RUN export DEBIAN_FRONTEND=noninteractive \
+&& apt-get -qqy update \
+&& apt-get -qqy install \
+  devscripts \
+  g++ \
+  gdb \
+  libc6-dbg \
+  python3-setuptools \
+  shellcheck \
+  shfmt \
+  texinfo \
+  texlive \
+  texlive-latex-extra \
+  universal-ctags \
+  yamllint \
+  zlib1g-dev
+
+# Install Python dependencies (obsolete, to be removed).
+# `pipx ensurepath` only adds to the path in newly-started shells.
+# BUT, setting the path for the current user is not enough.
+# Azure creates a new user and runs jobs as it.
+# So, install into /usr/local/bin which is already on every user's path.
+RUN export DEBIAN_FRONTEND=noninteractive \
+&& apt-get -qqy update \
+&& apt-get -qqy install \
+  pipx \
+&& PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin pipx install mypy \
+&& PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin pipx install ruff
+
+# Install uv (manages Python dependencies).
+# UV_NO_MODIFY_PATH=1 keeps the installer from editing shell startup files and
+# from writing /root/.local/bin/env, a script for those files to source.  This
+# Dockerfile sets the PATH instead.
+# Download the installer to a file because a failure on the left side of a
+# pipe would not fail the build.
+RUN export DEBIAN_FRONTEND=noninteractive \
+&& echo "installing uv" \
+&& wget -qO /tmp/uv-install.sh https://astral.sh/uv/install.sh \
+&& UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh \
+&& rm /tmp/uv-install.sh
+ENV PATH=/root/.local/bin:$PATH
+
+## `apt` installs a very old version of gradle (see `apt-cache policy gradle`).
+## `snap` does not work under docker.
+# Need zip to install SDKMAN, need SDKMAN to install gradle.
+# However, SDKMAN requires bash, which would prevent the Docker container from
+# testing that Daikon runs under POSIX sh.
+RUN export DEBIAN_FRONTEND=noninteractive \
+&& wget -q https://services.gradle.org/distributions/gradle-9.8.0-bin.zip \
+&& unzip -q -d /opt/gradle gradle-9.8.0-bin.zip \
+&& rm gradle-9.8.0-bin.zip
+ENV PATH=$PATH:/opt/gradle/gradle-9.8.0/bin
+]])m4_dnl
+
+# Azure runs jobs as a non-root user, who must be able to read files in /root
+# and run programs installed there.  /root is inaccessible to other users.
+# This step must follow every step that writes to /root.
+RUN chmod -R og+rX /root
+
+# Clean up.
+RUN export DEBIAN_FRONTEND=noninteractive \
+&& apt-get -qqy autoremove \
+&& apt-get clean \
+&& rm -rf /var/lib/apt/lists/*
